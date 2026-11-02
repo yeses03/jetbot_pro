@@ -5,8 +5,10 @@
   <!-- Odometry distance scale, sent to the chassis firmware at startup. Default 1.0 = unchanged.
        Measured 2026-11-02: wheel odometry reads about 0.76 of the true distance, so try 1.3. -->
   <arg name="linear_correction" default="1.0"/>
+  <arg name="angular_correction" default="1.0"/>
   <include file="$(find jetbot_pro)/launch/jetbot.launch" />
   <param name="/jetbot/linear_correction" value="$(arg linear_correction)"/>
+  <param name="/jetbot/angular_correction" value="$(arg angular_correction)"/>
   <include file="$(find jetbot_pro)/launch/lidar.launch" />
 
   <arg name="map_file" default="$(env HOME)/maps/livingroom_20261102_0830_cropped.yaml"/>
