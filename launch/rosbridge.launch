@@ -1,11 +1,9 @@
 <?xml version="1.0"?>
 <!-- Link for the desktop dashboard (gui/). WARNING: rosbridge has NO authentication, and in rosbridge_server 0.11.16 the
-     `address` argument does NOT restrict where it listens (verified on the robot: it listened on 0.0.0.0:9090 even with
-     address:=127.0.0.1). Anyone on the network could publish /cmd_vel. Before starting it, block outside access on the Jetson:
-         sudo iptables -I INPUT -p tcp -m tcp --destination-port 9090 ! -i lo -j DROP
-     (not persistent across reboots), confirm from another machine that `nc -vz <jetson-ip> 9090` FAILS, and then use an SSH tunnel:
-         ssh -N -L 9090:127.0.0.1:9090 nvidia@<jetson-ip>      and point the GUI at host 127.0.0.1
-     Needs the package ros-melodic-rosbridge-suite. -->
+     address argument does NOT restrict where it listens (verified on the robot: it listened on 0.0.0.0:9090 even with
+     address:=127.0.0.1). Anyone on the network could publish /cmd_vel. Block outside access with a firewall rule on the Jetson
+     BEFORE starting it, confirm from another machine that port 9090 is unreachable, then use an SSH tunnel to 127.0.0.1:9090.
+     Exact commands: gui/robot_side/ROBOT_SETUP.md, section 3. Needs the package ros-melodic-rosbridge-suite. -->
 <launch>
   <arg name="address" default="127.0.0.1"/>
   <arg name="port" default="9090"/>
