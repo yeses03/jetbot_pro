@@ -180,6 +180,10 @@ class EndToEndTests(unittest.TestCase):
             self.assertTrue(wait_for(lambda: link.snapshot().conn_state == "connected"))
             self.assertTrue(wait_for(lambda: link.snapshot().goal is not None))
             self.assertEqual(link.snapshot().goal[:3], ("g1", SUCCEEDED, "Goal reached."))
+            self.assertTrue(wait_for(lambda: link.snapshot().plan is not None))
+            plan = link.snapshot().plan
+            self.assertEqual(plan[0], (0.0, 0.0))
+            self.assertEqual(plan[-1], (4.0, 2.0))                    # the last pose is always kept
             self.assertTrue(link.send_goal((1.0, 2.0, math.pi / 2)))
             self.assertTrue(link.cancel_goals())
             self.assertTrue(wait_for(lambda: len(server.client_publishes) >= 2))

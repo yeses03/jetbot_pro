@@ -61,6 +61,9 @@ class FakeRosbridge:
                         await push(topic, {"transforms": [tfmsg("map", "odom", 1.0, 2.0, 0.0),
                                                           tfmsg("odom", "base_footprint", 0.5, 0.0, math.pi / 2),
                                                           tfmsg("base_footprint", "laser_frame", 0, 0, math.pi)]})
+                    elif topic == "/move_base/GlobalPlanner/plan":
+                        await push(topic, {"header": {"frame_id": "map"}, "poses": [
+                            {"pose": {"position": {"x": float(i), "y": 0.5 * i, "z": 0.0}}} for i in range(5)]})
                     elif topic == "/move_base/status":
                         await push(topic, {"status_list": [{"goal_id": {"id": "g1", "stamp": {"secs": 0, "nsecs": 0}},
                                                             "status": 3, "text": "Goal reached."}]})
