@@ -119,6 +119,7 @@ class MapData:
     frame_id: str
     rgb: Image.Image          # image row 0 = top = highest y
     occ: Optional[np.ndarray] = None            # bool (height, width), grid coordinates (row 0 = bottom): occupied cells
+    free: Optional[np.ndarray] = None           # bool (height, width): known-free cells (unknown cells are neither free nor occupied)
     _dist: Optional[np.ndarray] = field(default=None, init=False, repr=False, compare=False)
 
     def dist_to_wall(self, max_cells: int = 12) -> Optional[np.ndarray]:
@@ -181,10 +182,10 @@ def map_from_message(msg: dict) -> MapData:
         raise ValueError("empty or invalid map metadata")
     q = o["orientation"]
     img = occupancy_to_image(msg["data"], w, h)            # also validates the cell count
-    occ = np.asarray(msg["data"], dtype=np.int16).reshape(h, w) >= OCC_THRESHOLD
+    grid = np.asarray(msg["data"], dtype=np.int16).reshape(h, w)
     return MapData(w, h, res, (float(o["position"]["x"]), float(o["position"]["y"]),
                                quat_to_yaw(q["x"], q["y"], q["z"], q["w"])),
-                   clean_frame(msg["header"]["frame_id"]), img, occ)
+                   clean_frame(msg["header"]["frame_id"]), img, grid >= OCC_THRESHOLD, grid == 0)
 
 
 @dataclass
@@ -317,4 +318,100 @@ def goal_message(goal: Tuple[float, float, float], frame: str = "map") -> dict:
 def heading_towards(frm: Tuple[float, float], to: Tuple[float, float]) -> float:
     """Yaw that points from `frm` to `to` (used when a goal is clicked without dragging a heading)."""
     return math.atan2(to[1] - frm[1], to[0] - frm[0])
+
+
+def initial_pose_message(pose: Tuple[float, float, float], frame: str = "map", sigma_xy: float = 0.05,
+                         sigma_yaw: float = 0.05) -> dict:
+    """geometry_msgs/PoseWithCovarianceStamped for /initialpose: tells AMCL where the robot really is (not a motion command)."""
+    x, y, yaw = pose
+    cov = [0.0] * 36
+    cov[0] = cov[7] = sigma_xy ** 2
+    cov[35] = sigma_yaw ** 2
+    return {"header": {"frame_id": frame},
+            "pose": {"pose": {"position": {"x": float(x), "y": float(y), "z": 0.0},
+                              "orientation": {"x": 0.0, "y": 0.0, "z": math.sin(yaw / 2.0), "w": math.cos(yaw / 2.0)}},
+                     "covariance": cov}}
+
+
+def _scores(m: MapData, d: np.ndarray, pts: np.ndarray, xs, ys, yaws, tol_cells: int) -> np.ndarray:
+    """Fit score of every pose (xs[i], ys[i], yaws[i]) at once. Points outside the map are misses."""
+    xs, ys, yaws = np.asarray(xs, float), np.asarray(ys, float), np.asarray(yaws, float)
+    c, s = np.cos(yaws)[:, None], np.sin(yaws)[:, None]
+    wx = xs[:, None] + c * pts[None, :, 0] - s * pts[None, :, 1]
+    wy = ys[:, None] + s * pts[None, :, 0] + c * pts[None, :, 1]
+    ox, oy, oth = m.origin
+    co, so = math.cos(oth), math.sin(oth)
+    dx, dy = wx - ox, wy - oy
+    ci = np.floor((co * dx + so * dy) / m.resolution).astype(np.int32)
+    ri = np.floor((-so * dx + co * dy) / m.resolution).astype(np.int32)
+    inside = (ci >= 0) & (ci < m.width) & (ri >= 0) & (ri < m.height)
+    out = np.zeros(wx.shape, bool)
+    out[inside] = d[ri[inside], ci[inside]] <= tol_cells
+    return out.mean(axis=1)
+
+
+def pose_search(m: MapData, pts: np.ndarray, centre: Optional[Tuple[float, float, float]] = None, radius: float = 1.0,
+                yaw_range: float = math.radians(60), tol_m: float = 0.05, max_points: int = 300) -> list:
+    """Where does the scan fit the map best? `pts` = scan points in the ROBOT frame (base_footprint).
+
+    centre given: search +-radius metres and +-yaw_range around it. centre None: search the whole room (free floor at least
+    0.2 m from walls, every heading). Returns up to two distinct candidates [(score, x, y, yaw), ...], best first; the second is the
+    best pose that is more than 0.5 m or 30 degrees from the first, so a close second score means the answer is ambiguous.
+    """
+    d = m.dist_to_wall()
+    if d is None or m.free is None or pts.shape[0] < 50:
+        return []
+    if pts.shape[0] > max_points:
+        pts = pts[np.random.RandomState(0).choice(pts.shape[0], max_points, replace=False)]
+    tol = max(1, int(round(tol_m / m.resolution)))
+    if centre is None:
+        rows, cols = np.nonzero(m.free & (d >= 4))
+        keep = (rows % 3 == 0) & (cols % 3 == 0)                               # one candidate every 0.15 m at 0.05 m cells
+        ox, oy, oth = m.origin
+        px = ox + (cols[keep] + 0.5) * m.resolution
+        py = oy + (rows[keep] + 0.5) * m.resolution
+        yaw_set = np.radians(np.arange(0, 360, 8.0))
+        cx = np.repeat(px, yaw_set.size); cy = np.repeat(py, yaw_set.size); cyaw = np.tile(yaw_set, px.size)
+    else:
+        step = 0.10
+        g = np.arange(-radius, radius + 1e-9, step)
+        yaw_set = centre[2] + np.radians(np.arange(-math.degrees(yaw_range), math.degrees(yaw_range) + 1e-9, 5.0))
+        gx, gy, gyaw = np.meshgrid(centre[0] + g, centre[1] + g, yaw_set, indexing="ij")
+        cx, cy, cyaw = gx.ravel(), gy.ravel(), gyaw.ravel()
+    if cx.size == 0:
+        return []
+    score = np.empty(cx.size)
+    for i in range(0, cx.size, 2000):
+        sl = slice(i, i + 2000)
+        score[sl] = _scores(m, d, pts, cx[sl], cy[sl], cyaw[sl], tol)
+
+    def distinct(a, b):
+        return math.hypot(a[1] - b[1], a[2] - b[2]) > 0.5 or abs(math.atan2(math.sin(a[3] - b[3]), math.cos(a[3] - b[3]))) > math.radians(30)
+
+    order = np.argsort(-score)[:400]
+    picks = []
+    for i in order:
+        cand = (float(score[i]), float(cx[i]), float(cy[i]), float(cyaw[i]))
+        if all(distinct(cand, q) for q in picks):
+            picks.append(cand)
+        if len(picks) == 3:
+            break
+    refined = []
+    fx = np.arange(-0.12, 0.121, 0.03)
+    fy = np.arange(-0.12, 0.121, 0.03)
+    fyaw = np.radians(np.arange(-8.0, 8.1, 2.0))
+    for sc, x, y, yaw in picks:
+        gx, gy, gyaw = np.meshgrid(x + fx, y + fy, yaw + fyaw, indexing="ij")
+        gx, gy, gyaw = gx.ravel(), gy.ravel(), gyaw.ravel()
+        s2 = _scores(m, d, pts, gx, gy, gyaw, tol)
+        j = int(np.argmax(s2))
+        refined.append((float(s2[j]), float(gx[j]), float(gy[j]), float(gyaw[j])))
+    refined.sort(key=lambda t: -t[0])
+    out = []
+    for cand in refined:
+        if all(distinct(cand, q) for q in out):
+            out.append(cand)
+        if len(out) == 2:
+            break
+    return out
 
