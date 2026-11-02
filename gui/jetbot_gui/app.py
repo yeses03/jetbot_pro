@@ -3,13 +3,15 @@ from __future__ import annotations
 
 import math
 import sys
+import time
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
 from PIL import ImageTk
 
 from . import config as cfgmod
-from .geometry import View, render_map, transform_points
+from .geometry import View, heading_towards, render_map, transform_points
+from .goals import RouteRunner, blockers
 from .link import CONNECTED, RobotLink
 from .status import BAD, IDLE, OK, WARN, assess
 
@@ -34,8 +36,15 @@ class App:
         self.host_var = tk.StringVar(value=cfg.host)
         self.port_var = tk.StringVar(value=str(cfg.port))
         self.chips = {}
+        self.armed = tk.BooleanVar(value=False)       # goals can only be sent while armed; resets after each send
+        self.goal_mode = tk.BooleanVar(value=False)   # map clicks set a goal instead of panning
+        self.pending = None                           # (x, y, yaw) chosen on the map, not yet sent
+        self._goal_drag = None                        # world point where a heading drag started
+        self.route = []                               # goals queued for Run route
+        self.runner = RouteRunner()
+        self._gate = []                               # why a goal is blocked right now (empty = allowed)
 
-        root.title("JetBot Pro dashboard (read-only)")
+        root.title("JetBot Pro dashboard (goals only, no manual driving)")
         root.configure(bg=BG)
         root.minsize(1100, 680)
         self._style()
@@ -67,7 +76,7 @@ class App:
         ttk.Button(bar, text="Connect", command=self.connect).pack(side="left", padx=6)
         ttk.Button(bar, text="Disconnect", command=self.disconnect).pack(side="left")
         ttk.Button(bar, text="Save as default", command=self.save_defaults).pack(side="left", padx=6)
-        tk.Label(bar, text="READ-ONLY: this build cannot move the robot", bg=PANEL, fg=GREY).pack(side="right", padx=10)
+        tk.Label(bar, text="Sends GOALS to move_base only. Cancel stops it; the power switch is the real stop.", bg=PANEL, fg=GREY).pack(side="right", padx=10)
 
         chips = tk.Frame(r, bg=BG)
         chips.grid(row=1, column=0, sticky="ew", padx=6, pady=(6, 0))
@@ -101,7 +110,7 @@ class App:
         cv = self.map_cv
         cv.bind("<ButtonPress-1>", self._press)
         cv.bind("<B1-Motion>", self._motion)
-        cv.bind("<ButtonRelease-1>", lambda e: setattr(self, "_drag", None))
+        cv.bind("<ButtonRelease-1>", self._release)
         cv.bind("<Motion>", self._hover)
         cv.bind("<MouseWheel>", lambda e: self._zoom(e, 1.15 if e.delta > 0 else 1 / 1.15))
         cv.bind("<Button-4>", lambda e: self._zoom(e, 1.15))     # X11 wheel
@@ -115,6 +124,33 @@ class App:
         self.pose_txt = tk.Label(pb, text="", bg=BG, fg=FG, justify="left", anchor="w", font=("Menlo", 10),
                                  width=36)
         self.pose_txt.pack(anchor="w", padx=6, pady=4)
+
+        gb = ttk.LabelFrame(side, text="Goals (moves the robot)")
+        gb.pack(fill="x", pady=(6, 0))
+        tk.Label(gb, text="Cancel stops the robot, but the POWER SWITCH is the real stop.", bg=BG, fg=GREY,
+                 font=("TkDefaultFont", 8), wraplength=270, justify="left").pack(anchor="w", padx=6)
+        ttk.Checkbutton(gb, text="Arm goals (allow the robot to move)", variable=self.armed).pack(anchor="w", padx=6)
+        ttk.Checkbutton(gb, text="Click map to set a goal (drag = heading)", variable=self.goal_mode).pack(anchor="w", padx=6)
+        self.goal_txt = tk.Label(gb, text="no goal chosen", bg=BG, fg=FG, justify="left", anchor="w",
+                                 font=("Menlo", 9), wraplength=270)
+        self.goal_txt.pack(anchor="w", padx=6, pady=(2, 0))
+        row = ttk.Frame(gb)
+        row.pack(fill="x", padx=6, pady=2)
+        self.send_btn = ttk.Button(row, text="Send goal", command=self.send_pending)
+        self.send_btn.pack(side="left")
+        ttk.Button(row, text="Add to route", command=self.add_to_route).pack(side="left", padx=4)
+        row2 = ttk.Frame(gb)
+        row2.pack(fill="x", padx=6, pady=2)
+        self.run_btn = ttk.Button(row2, text="Run route", command=self.run_route)
+        self.run_btn.pack(side="left")
+        ttk.Button(row2, text="Clear route", command=self.clear_route).pack(side="left", padx=4)
+        self.cancel_btn = tk.Button(gb, text="CANCEL GOAL (stop)", command=self.cancel_all, bg="#8b1e1e", fg="white")
+        self.cancel_btn.pack(fill="x", padx=6, pady=(2, 2))
+        self.route_txt = tk.Label(gb, text="", bg=BG, fg=FG, justify="left", anchor="w", font=("Menlo", 9), wraplength=270)
+        self.route_txt.pack(anchor="w", padx=6)
+        self.block_lbl = tk.Label(gb, text="", bg=BG, fg=LEVEL_COLOR[WARN], justify="left", anchor="w",
+                                  font=("TkDefaultFont", 8), wraplength=270)
+        self.block_lbl.pack(anchor="w", padx=6, pady=(0, 4))
 
         lb = ttk.LabelFrame(side, text="LiDAR (robot frame, forward = up)")
         lb.pack(fill="x", pady=(6, 0))
@@ -175,9 +211,31 @@ class App:
 
     # map mouse handling
     def _press(self, e):
+        if self.goal_mode.get():
+            w, h = self._size()
+            x, y = self.view.to_world(e.x, e.y, w, h)
+            self._goal_drag = (x, y)
+            self.pending = (x, y, self._default_yaw(x, y))
+            return
         self._drag = (e.x, e.y)
 
+    def _default_yaw(self, x, y):
+        pose = self.link.snapshot().pose_map
+        return heading_towards(pose[:2], (x, y)) if pose else 0.0
+
+    def _release(self, e):
+        self._drag = None
+        self._goal_drag = None
+
     def _motion(self, e):
+        if self._goal_drag:
+            w, h = self._size()
+            x, y = self.view.to_world(e.x, e.y, w, h)
+            gx, gy = self._goal_drag
+            if math.hypot(x - gx, y - gy) > 0.10:             # a real drag sets the heading
+                self.pending = (gx, gy, heading_towards((gx, gy), (x, y)))
+            self._hover(e)
+            return
         if self._drag:
             self.view.pan_px(e.x - self._drag[0], e.y - self._drag[1])
             self._drag = (e.x, e.y)
@@ -197,6 +255,7 @@ class App:
             snap = self.link.snapshot()
             a = assess(snap, self.cfg)
             self._update_chips(a)
+            self._update_goals(snap, a)
             self._draw_map(snap, a)
             self._draw_lidar(snap, a)
             self._update_text(snap, a)
@@ -254,9 +313,96 @@ class App:
         else:
             cv.create_text(8, 8, anchor="nw", fill=LEVEL_COLOR[WARN], tags="overlay",
                            text="Robot not drawn: no live map-frame pose")
+        self._draw_goals(cv, v, w, h)
         if self._cursor_world:
             self.cursor_lbl.configure(text=f"x {self._cursor_world[0]:+.2f}  y {self._cursor_world[1]:+.2f} m   "
                                            "(wheel = zoom, drag = pan)")
+
+    # ------------------------------------------------------------------ goals
+    def _update_goals(self, snap, a):
+        self._gate = blockers(a, snap, self.cfg, self.armed.get())
+        was_running = self.runner.running
+        goal = self.runner.step(snap.goal, self._gate, time.monotonic())
+        if goal is not None:
+            self.link.send_goal(goal)
+        if was_running and not self.runner.running:
+            self.armed.set(False)                              # a finished or failed route disarms
+        lines = []
+        if self.pending:
+            x, y, yaw = self.pending
+            pose = snap.pose_map
+            d = f", {math.hypot(x - pose[0], y - pose[1]):.1f} m away" if pose else ""
+            lines.append(f"goal  x {x:+.2f}  y {y:+.2f}  yaw {math.degrees(yaw):+.0f} deg{d}")
+        else:
+            lines.append("no goal chosen" + ("  (click the map)" if self.goal_mode.get() else ""))
+        if snap.goal is not None and snap.goal_age is not None:
+            lines.append(f"move_base: {snap.goal[2] or 'status ' + str(snap.goal[1])} ({snap.goal_age:.0f}s ago)")
+        self.goal_txt.configure(text="\n".join(lines))
+        route = [f"route: {len(self.route)} legs"] if self.route else []
+        if self.runner.message and self.runner.state != RouteRunner.IDLE:
+            route.append(self.runner.message)
+        self.route_txt.configure(text="\n".join(route), fg=LEVEL_COLOR[BAD if self.runner.state == RouteRunner.FAILED else OK])
+        wants = self.pending is not None or bool(self.route)
+        self.block_lbl.configure(text=("Blocked: " + "; ".join(self._gate)) if (wants and self._gate) else "")
+        connected = snap.conn_state == CONNECTED
+        self.send_btn.state(["!disabled"] if (self.pending and not self._gate and not self.runner.running) else ["disabled"])
+        self.run_btn.state(["!disabled"] if (self.route and not self._gate and not self.runner.running) else ["disabled"])
+        self.cancel_btn.configure(state="normal" if connected else "disabled")
+
+    def send_pending(self):
+        if not self.pending or self._gate:
+            return
+        x, y, yaw = self.pending
+        pose = self.link.snapshot().pose_map
+        far = f" ({math.hypot(x - pose[0], y - pose[1]):.1f} m away)" if pose else ""
+        if not messagebox.askyesno("Send goal", f"Send the robot to x {x:+.2f}, y {y:+.2f}, facing {math.degrees(yaw):+.0f} deg{far}?\n\n"
+                                   "THE ROBOT WILL MOVE. Keep clear, and keep a hand near the power switch."):
+            return
+        if self.link.send_goal(self.pending):
+            self.armed.set(False)                              # one goal per arming
+
+    def add_to_route(self):
+        if self.pending:
+            self.route.append(self.pending)
+
+    def clear_route(self):
+        if not self.runner.running:
+            self.route = []
+            self.runner = RouteRunner()
+
+    def run_route(self):
+        if not self.route or self._gate or self.runner.running:
+            return
+        pose = self.link.snapshot().pose_map
+        pts = ([pose[:2]] if pose else []) + [g[:2] for g in self.route]
+        length = sum(math.hypot(b[0] - a_[0], b[1] - a_[1]) for a_, b in zip(pts, pts[1:]))
+        if not messagebox.askyesno("Run route", f"Run {len(self.route)} legs, about {length:.1f} m in a straight-line sum?\n\n"
+                                   "THE ROBOT WILL MOVE, one leg after another, and stops at the first failure.\n"
+                                   "Keep clear, hand near the power switch, and press CANCEL GOAL to stop."):
+            return
+        self.runner.start(self.route)
+
+    def cancel_all(self):
+        self.runner.stop("cancelled by you")
+        self.link.cancel_goals()
+        self.armed.set(False)
+
+    def _draw_goals(self, cv, v, w, h):
+        legs = self.route
+        pts = []
+        for i, (x, y, yaw) in enumerate(legs):
+            u, vv = v.to_px(x, y, w, h)
+            pts.append((u, vv))
+            cv.create_oval(u - 9, vv - 9, u + 9, vv + 9, outline="#3fb950", width=2, tags="overlay")
+            cv.create_text(u, vv, text=str(i + 1), fill="#3fb950", tags="overlay")
+            cv.create_line(u, vv, u + 22 * math.cos(yaw), vv - 22 * math.sin(yaw), fill="#3fb950", width=2, arrow="last", tags="overlay")
+        for p, q in zip(pts, pts[1:]):
+            cv.create_line(p[0], p[1], q[0], q[1], fill="#3fb950", dash=(4, 3), tags="overlay")
+        if self.pending:
+            x, y, yaw = self.pending
+            u, vv = v.to_px(x, y, w, h)
+            cv.create_oval(u - 8, vv - 8, u + 8, vv + 8, outline="#ff9f1a", width=3, tags="overlay")
+            cv.create_line(u, vv, u + 26 * math.cos(yaw), vv - 26 * math.sin(yaw), fill="#ff9f1a", width=3, arrow="last", tags="overlay")
 
     def _draw_lidar(self, snap, a):
         cv = self.lidar_cv
