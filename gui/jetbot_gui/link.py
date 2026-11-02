@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional, Set
 
 from .config import Config
-from .geometry import (CANCEL_ALL, MapData, Pose2D, ScanData, TfBuffer, clean_frame, goal_message, map_from_message,
+from .geometry import (CANCEL_ALL, MapData, initial_pose_message, Pose2D, ScanData, TfBuffer, clean_frame, goal_message, map_from_message,
                        quat_to_yaw, scan_from_message)
 
 # connection states
@@ -280,8 +280,8 @@ class RobotLink:
         """Publish one message. The only topics ever allowed are the goal and cancel topics: the GUI cannot send
         velocity commands, so it cannot bypass move_base's obstacle handling."""
         c = self.cfg
-        if topic not in (c.goal_topic, c.cancel_topic):
-            raise ValueError(f"refusing to publish to {topic}: only goals and goal cancellation are allowed")
+        if topic not in (c.goal_topic, c.cancel_topic, c.initialpose_topic):
+            raise ValueError(f"refusing to publish to {topic}: only goals, goal cancellation and the AMCL initial pose are allowed")
         import roslibpy
         with self._lock:
             ros, ready = self._ros, self._state == CONNECTED
@@ -304,6 +304,11 @@ class RobotLink:
     def send_goal(self, goal) -> bool:
         """Ask move_base to go to goal = (x, y, yaw) in the map frame."""
         return self._publish(self.cfg.goal_topic, "geometry_msgs/PoseStamped", goal_message(goal, self.cfg.map_frame))
+
+    def set_initial_pose(self, pose) -> bool:
+        """Tell AMCL where the robot really is, pose = (x, y, yaw) in the map frame. Moves nothing by itself."""
+        return self._publish(self.cfg.initialpose_topic, "geometry_msgs/PoseWithCovarianceStamped",
+                             initial_pose_message(pose, self.cfg.map_frame))
 
     def cancel_goals(self) -> bool:
         """Cancel every move_base goal (the robot stops). Not an e-stop: use the power switch for that."""
