@@ -125,7 +125,8 @@ Ground truth for every row is a scan-to-map fit (`tools/scan_map_fit.py`) taken 
 - Behaviour near the open doorway (unknown space is disallowed in the planner, but the map edge there is open).
 - Whether `linear_correction` persists in firmware across a power cycle (not tested).
 - The `jetbot.cpp` loop-rate patch (unbuilt) and whether it affects navigation; the GUI integration (read-only Tk/rosbridge dashboard exists in `gui/`, not deployed); the Git reconciliation on the Jetson; the `y = msg.linear.x` quirk.
-- Nothing from this work is committed or pushed except the odometry fix (`bd37a5f`).
+- Whether the far end of the room is mapped well enough for navigation (a fresh, slower mapping run with a second lap would settle it).
+- Local commits on branch `claude/jetbot-diagnostics` are not pushed.
 
 ## 10. Safety and operations findings
 
@@ -151,6 +152,23 @@ Ground truth for every row is a scan-to-map fit (`tools/scan_map_fit.py`) taken 
 - `tools/scan_dump.py` runs on the Jetson (read-only) and prints a merged scan as robot-frame JSON; `tools/scan_map_fit.py` slides it over a saved map and reports the best pose and the fit at a guessed pose. On the session's data it reproduces the 0.39 m x error (best x 1.45 against AMCL's 1.80).
 - The dashboard (`gui/`) now has a *Pose vs scan* chip using the same fit, tested on real scans (see its README). It has never been run against the live robot: rosbridge is not installed on the Jetson and installing it needs a `sudo` password.
 - Commits are local on branch `claude/jetbot-diagnostics`, not pushed.
+
+## 13. Later the same day: long route, dashboard, and what went wrong
+
+- **Virtual wall.** The 1 m doorway in the bottom wall (x 2.60-3.55 m, y -0.30 m) is closed in a copy of the map (`..._walled`, 41 cells); `navigate.launch` loads it by default.
+- **Long route [measured, supervised]:** S -> A (1.5, 1.5) -> B (3.0, 2.0) -> C (4.5, 1.5) -> home. Legs 1-3 reached within about 0.12 m of the goals at 0.2 m/s with 0.32 m the closest approach; the
+  home leg aborted "oscillating" about 0.23 m short in the tight start corner (right wall 0.34 m). A home goal away from the wall (0.5, 0.4) is the workaround.
+- **Security incident [measured]:** `rosbridge_server` 0.11.16 listens on **0.0.0.0:9090 whatever `address` says** (the argument only affects a log line). It was exposed, with no authentication, for about 30 s before
+  being stopped. It now requires an iptables rule on the Jetson (`sudo iptables -I INPUT -p tcp --dport 9090 ! -i lo -j DROP`, not persistent across reboots) verified from another machine, and an SSH tunnel.
+- **Dashboard (`gui/`)** now sends `move_base` goals, cancels, runs routes, saves named places, relocalises (scan-to-map pose search + AMCL initial pose) and has a teleop pad. Everything that can move the robot is behind
+  one MOTION switch (off by default, 5 min idle timeout) and a safety gate (live pose, `move_base` running, pose agrees with the scan, AMCL certain, no active goal, teleop off). Teleop is the only velocity publisher:
+  i , j l k keys, 0.7 s hold, speed caps (0.25 m/s, 0.8 rad/s) enforced twice, a LiDAR bumper, and it stops on focus loss / Esc / disconnect. There is still no hardware-backed or multiplexed emergency stop.
+  106 automated tests pass; the window layout was audited numerically (screen capture is not possible in the development environment), so the visual finish still needs a human look.
+- **AMCL drift on long moves [measured, cause unproven]:** after the 3.4 m diagonal move to B, AMCL reported (2.99, 1.98) while the scan fit (0.80 against 0.40 at AMCL's pose) put the robot at about
+  (2.99, 1.70) facing 1 degree; 40 no-motion updates did not recover it. At C the dashboard's pose-vs-scan check read 38%. Candidates: AMCL motion noise too high (`odom_alpha3` 0.8 was the vendor default,
+  set for poor odometry), or the far, furnished end of the room being mapped less accurately (not separated yet). `navigate.launch` now uses lower noise (alpha 0.12/0.10/0.20/0.10, `sigma_hit` 0.10); untested in motion.
+  A hand-carry of the robot also leaves AMCL wrong (the user carried it back to the start twice because of battery limits); the dashboard's relocalise button fixes that in about a second.
+- **Calibration of record:** `linear_correction` 1.15, `angular_correction` 0.9 (section 7b).
 
 ## 12. Deliverable files (all in the repo working tree, uncommitted unless stated)
 
