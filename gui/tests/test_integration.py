@@ -31,6 +31,7 @@ class FakeRosbridge:
         self.loop = asyncio.new_event_loop()
         self.server = None
         self.subscribed = []
+        self.client_publishes = []              # every `publish` op the GUI sends to the (fake) robot
         self.thread = threading.Thread(target=self.loop.run_forever, daemon=True)
         self.thread.start()
 
@@ -60,6 +61,9 @@ class FakeRosbridge:
                         await push(topic, {"transforms": [tfmsg("map", "odom", 1.0, 2.0, 0.0),
                                                           tfmsg("odom", "base_footprint", 0.5, 0.0, math.pi / 2),
                                                           tfmsg("base_footprint", "laser_frame", 0, 0, math.pi)]})
+                    elif topic == "/move_base/status":
+                        await push(topic, {"status_list": [{"goal_id": {"id": "g1", "stamp": {"secs": 0, "nsecs": 0}},
+                                                            "status": 3, "text": "Goal reached."}]})
                     elif topic == "/scan":
                         await push(topic, {"header": {"frame_id": "laser_frame"}, "angle_min": 0.0,
                                            "angle_increment": math.pi / 2, "range_min": 0.15, "range_max": 12.0,
@@ -76,6 +80,8 @@ class FakeRosbridge:
                         await push("/map", grid_msg(10, 10, 0.1, (0, 0), 0, {(1, 1): 100, (2, 2): 0}))
                     if task is None:
                         task = asyncio.ensure_future(stream())
+                elif m["op"] == "publish":
+                    self.client_publishes.append(m)
                 elif m["op"] == "call_service":
                     vals = {"/rosapi/nodes": {"nodes": ["/amcl", "/move_base", "/rosbridge_websocket"]},
                             "/rosapi/topics": {"topics": ["/scan"], "types": ["sensor_msgs/LaserScan"]}}
