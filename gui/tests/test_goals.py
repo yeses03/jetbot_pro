@@ -142,7 +142,7 @@ class RouteTests(unittest.TestCase):
 class WhitelistTests(unittest.TestCase):
     def test_link_refuses_any_other_topic(self):
         link = RobotLink(Config())
-        for topic in ("/cmd_vel", "/cmd_vel_dry", "/move_base_simple/goal_x", "/initialpose"):
+        for topic in ("/cmd_vel", "/cmd_vel_dry", "/move_base_simple/goal_x", "/initialpose_x", "/odom"):
             with self.assertRaises(ValueError):
                 link._publish(topic, "geometry_msgs/Twist", {})
 

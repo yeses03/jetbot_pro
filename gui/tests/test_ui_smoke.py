@@ -6,7 +6,9 @@ import json
 import math
 import os
 import sys
+import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -133,6 +135,82 @@ class GoalUiTests(unittest.TestCase):
             self.assertEqual(calls, ["cancel"])
             self.assertFalse(app.armed.get())
             self.assertFalse(app.runner.running)
+        finally:
+            root.destroy()
+
+
+
+class RelocUiTests(unittest.TestCase):
+    """The 'Check pose from scan' / 'Apply to AMCL' flow on a real scan where AMCL was 0.35 m wrong."""
+
+    def _app(self):
+        try:
+            import tkinter as tk
+            root = tk.Tk()
+        except Exception as exc:
+            self.skipTest(f"no usable Tk/display: {exc}")
+        root.withdraw()
+        from jetbot_gui.app import App
+        return root, App(root, Config(host="127.0.0.1"))
+
+    def _wait_done(self, root, app, timeout=30.0):
+        end = time.time() + timeout
+        while time.time() < end and app._reloc and app._reloc["state"] != "done":
+            root.update()
+            time.sleep(0.05)
+        root.update()
+
+    def test_check_then_apply_sends_the_scan_supported_pose(self):
+        root, app = self._app()
+        try:
+            with open(os.path.join(FIXTURES, "real_scans.json")) as f:
+                scan = json.load(f)["scan_b"]
+            ax, ay, adeg = scan["amcl_pose"]                           # what AMCL wrongly said
+            wrong = (ax, ay, math.radians(adeg))
+            s = snap(map=real_map(), map_age=1.0, scan=regular_scan(scan["points"]), scan_age=0.1, scan_hz=7.0,
+                     pose_map=wrong, pose_map_age=0.1, scan_in_map=wrong, scan_in_map_age=0.1,
+                     scan_in_base=(0.0, 0.0, 0.0), nodes={"/amcl", "/move_base"})
+            app.link.snapshot = lambda: s
+            applied = []
+            app.link.set_initial_pose = lambda p: applied.append(p) or True
+            app.tick()
+            self.assertIn("does not match", app.block_lbl.cget("text") or "does not match")   # gate is blocking at the wrong pose
+            app.check_pose()
+            self._wait_done(root, app)
+            app.tick()
+            self.assertIn("scan fits best", app.reloc_txt.cget("text"))
+            self.assertTrue(app.apply_btn.instate(["!disabled"]), app.reloc_txt.cget("text"))
+            with mock.patch("jetbot_gui.app.messagebox") as mb:
+                mb.askyesno.return_value = True
+                app.apply_pose()
+            self.assertEqual(len(applied), 1)
+            x, y, yaw = applied[0]
+            tx, ty, tdeg = scan["best_pose"]
+            self.assertLess(math.hypot(x - tx, y - ty), 0.12)
+            self.assertLess(abs(math.degrees(yaw) - tdeg), 6.0)
+        finally:
+            root.destroy()
+
+    def test_declining_the_dialog_applies_nothing(self):
+        root, app = self._app()
+        try:
+            with open(os.path.join(FIXTURES, "real_scans.json")) as f:
+                scan = json.load(f)["scan_b"]
+            ax, ay, adeg = scan["amcl_pose"]
+            wrong = (ax, ay, math.radians(adeg))
+            s = snap(map=real_map(), map_age=1.0, scan=regular_scan(scan["points"]), scan_age=0.1, scan_hz=7.0,
+                     pose_map=wrong, pose_map_age=0.1, scan_in_map=wrong, scan_in_map_age=0.1,
+                     scan_in_base=(0.0, 0.0, 0.0), nodes={"/amcl", "/move_base"})
+            app.link.snapshot = lambda: s
+            applied = []
+            app.link.set_initial_pose = lambda p: applied.append(p) or True
+            app.check_pose()
+            self._wait_done(root, app)
+            app.tick()
+            with mock.patch("jetbot_gui.app.messagebox") as mb:
+                mb.askyesno.return_value = False
+                app.apply_pose()
+            self.assertEqual(applied, [])
         finally:
             root.destroy()
 

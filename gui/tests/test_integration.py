@@ -140,6 +140,10 @@ class IntegrationTest(unittest.TestCase):
             self.assertTrue(wait_for(lambda: assess(link.snapshot(), cfg).scan_live, 20), "did not recover")
         finally:
             link.disconnect()
+            try:
+                server.stop()                       # also the second server started after the 'robot comes back' step
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
