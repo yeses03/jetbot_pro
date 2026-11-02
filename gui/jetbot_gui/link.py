@@ -64,6 +64,8 @@ class Snapshot:
     tf_frames: list
     goal: Optional[tuple] = None                    # newest move_base goal: (goal_id, status_code, text)
     goal_age: Optional[float] = None
+    plan: Optional[list] = None                     # planned path [(x, y), ...] in the map frame
+    plan_age: Optional[float] = None
 
 
 class RobotLink:
@@ -88,6 +90,7 @@ class RobotLink:
         self._odom = None                           # (pose, frame, rx)
         self._amcl = None                           # (pose, sigma, rx)
         self._goal = None                           # (goal_id, status, text, rx) of the newest move_base goal
+        self._plan = None                           # ([(x, y), ...], rx)
         self._pubs = {}                             # topic name -> roslibpy.Topic (publishers, goal/cancel only)
         self._last_rx_any: Optional[float] = None
         self._stats: Dict[str, TopicStat] = collections.defaultdict(TopicStat)
@@ -189,6 +192,7 @@ class RobotLink:
             (c.odom_topic, "nav_msgs/Odometry", 100, lambda m: self._on_odom(gen, m)),
             (c.amcl_pose_topic, "geometry_msgs/PoseWithCovarianceStamped", 0, lambda m: self._on_amcl(gen, m)),
             (c.goal_status_topic, "actionlib_msgs/GoalStatusArray", 0, lambda m: self._on_goal_status(gen, m)),
+            (c.plan_topic, "nav_msgs/Path", 200, lambda m: self._on_plan(gen, m)),
         ]
         self._topics_objs = []
         for name, typ, throttle, cb in subs:
@@ -275,6 +279,19 @@ class RobotLink:
                         self._goal = (str(g["goal_id"]["id"]), int(g["status"]), str(g.get("text", "")), time.monotonic())
         except Exception as exc:
             self._note(gen, self.cfg.goal_status_topic, f"bad message: {exc!r}")
+
+    def _on_plan(self, gen, msg):
+        try:
+            poses = msg.get("poses") or []
+            pts = [(float(p["pose"]["position"]["x"]), float(p["pose"]["position"]["y"])) for p in poses[::2]]
+            if poses:
+                last = poses[-1]["pose"]["position"]
+                pts.append((float(last["x"]), float(last["y"])))
+            if self._note(gen, self.cfg.plan_topic):
+                with self._lock:
+                    self._plan = (pts, time.monotonic())
+        except Exception as exc:
+            self._note(gen, self.cfg.plan_topic, f"bad message: {exc!r}")
 
     # ---------------------------------------------------------------- publishing (goal / cancel only)
     def _publish(self, topic: str, msg_type: str, payload: dict) -> bool:
@@ -388,4 +405,5 @@ class RobotLink:
                 nodes=set(self._nodes) if self._nodes is not None else None,
                 topics=dict(self._topics) if self._topics is not None else None,
                 discovery_error=self._disc_error, tf_frames=self._tf.frames(),
-                goal=self._goal[:3] if self._goal else None, goal_age=age(self._goal[3]) if self._goal else None)
+                goal=self._goal[:3] if self._goal else None, goal_age=age(self._goal[3]) if self._goal else None,
+                plan=list(self._plan[0]) if self._plan else None, plan_age=age(self._plan[1]) if self._plan else None)

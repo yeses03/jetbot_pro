@@ -839,6 +839,9 @@ class App:
             pts = [(u + L * math.cos(th), vv - L * math.sin(th)),
                    (u + 0.75 * L * math.cos(th + 2.5), vv - 0.75 * L * math.sin(th + 2.5)),
                    (u + 0.75 * L * math.cos(th - 2.5), vv - 0.75 * L * math.sin(th - 2.5))]
+            rr = self.cfg.footprint_radius_m * v.scale
+            if rr >= 3:
+                cv.create_oval(u - rr, vv - rr, u + rr, vv + rr, outline=T.ACCENT, width=1, dash=(3, 3), tags="overlay")
             cv.create_polygon(*[c for p in pts for c in p], fill=T.ACCENT, outline="white", width=1, tags="overlay")
         else:
             cv.create_text(12, 12, anchor="nw", fill=T.WARN, tags="overlay", font=T.F_SMALL, text="Robot not drawn: no live map-frame pose")
@@ -851,6 +854,13 @@ class App:
             self.cursor_lbl.configure(text=f"x {self._cursor_world[0]:+.2f}   y {self._cursor_world[1]:+.2f} m")
 
     def _draw_goals(self, cv, v, w, h, snap):
+        if snap.plan and snap.plan_age is not None and snap.plan_age < 4.0 and snap.goal is not None and snap.goal[1] in (PENDING, ACTIVE):
+            line = []
+            for x, y in snap.plan:
+                u, vv = v.to_px(x, y, w, h)
+                line += [u, vv]
+            if len(line) >= 4:
+                cv.create_line(*line, fill=T.ACCENT_HI, width=2, tags="overlay")
         pts = []
         for i, (x, y, yaw) in enumerate(self.route):
             u, vv = v.to_px(x, y, w, h)
