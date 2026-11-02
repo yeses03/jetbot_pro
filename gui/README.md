@@ -53,6 +53,14 @@ The *Goals* panel is on the right. To send the robot somewhere:
 3. Press **Send goal** and confirm the dialog. The robot WILL move: keep clear and keep a hand near the power switch.
 4. **CANCEL GOAL (stop)** cancels the goal and any route at any time. It is not an emergency stop.
 
+**Saved places.** Give a spot a name once, then send the robot there by name:
+* Click the map for a goal (drag for the heading), type a name, press **Save goal**. Or put the robot where you want it and press
+  **Save robot pose** (uses its live map pose, good to about 10 cm).
+* Pick the place in the dropdown and press **Go to place** (it goes through the same arm switch, safety gate and confirmation as a
+  clicked goal), **Add to route**, or **Delete**. Places show as purple diamonds with their names.
+* Places are stored in `places.local.json` (git-ignored) together with the map they were made on; if the robot is running a
+  different map, they are refused rather than sent to the wrong place.
+
 **Routes:** *Add to route* queues the pending goal (green numbered markers); *Run route* sends the legs one at a time and only
 moves on when move_base reports the previous goal reached. The first failure, cancellation, or failed safety check stops it;
 it never retries.
@@ -104,7 +112,7 @@ Map controls: wheel = zoom, drag = pan, **Fit**, **Centre on robot**. The cursor
 cd gui
 python -I -m unittest discover -s tests -v
 ```
-`test_goals.py` checks the goal message, the safety gate, the route runner (sends the next leg only after success, stops at the first failure), that the link refuses every topic except goal/cancel, that no velocity topic appears anywhere in the package, and that a goal and a cancel reach a fake rosbridge server correctly. `test_fit.py` checks the pose-vs-scan indicator on a synthetic room and on **real scans captured on the robot** (`tests/fixtures/`: the cleaned living-room map and three scans, with the pose AMCL reported and the pose a scan-to-map search found). `test_ui_smoke.py` builds the real Tk window, feeds it that real data and renders one refresh; it skips when there is no display.
+`test_goals.py` checks the goal message, the safety gate, the route runner (sends the next leg only after success, stops at the first failure), that the link refuses every topic except goal/cancel, that no velocity topic appears anywhere in the package, and that a goal and a cancel reach a fake rosbridge server correctly. `test_places.py` checks saving, name validation, atomic writes, the different-map refusal, and the go-to-place flow with a declined/accepted confirmation. `test_fit.py` checks the pose-vs-scan indicator on a synthetic room and on **real scans captured on the robot** (`tests/fixtures/`: the cleaned living-room map and three scans, with the pose AMCL reported and the pose a scan-to-map search found). `test_ui_smoke.py` builds the real Tk window, feeds it that real data and renders one refresh; it skips when there is no display.
 `test_core.py` covers map orientation/origin/rotation, scan invalid-value handling, TF composition, staleness and the
 status rules. `test_integration.py` runs the real roslibpy client against a **fake rosbridge server that exists only inside
 the test** (connect-before-server-exists, live data, server dies → data goes stale, server returns → recovers). The GUI itself
