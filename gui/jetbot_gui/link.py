@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional, Set
 
 from .config import Config
-from .geometry import (MapData, Pose2D, ScanData, TfBuffer, clean_frame, map_from_message,
+from .geometry import (CANCEL_ALL, MapData, Pose2D, ScanData, TfBuffer, clean_frame, goal_message, map_from_message,
                        quat_to_yaw, scan_from_message)
 
 # connection states
@@ -61,6 +61,8 @@ class Snapshot:
     topics: Optional[Dict[str, str]]
     discovery_error: str
     tf_frames: list
+    goal: Optional[tuple] = None                    # newest move_base goal: (goal_id, status_code, text)
+    goal_age: Optional[float] = None
 
 
 class RobotLink:
@@ -84,6 +86,8 @@ class RobotLink:
         self._scan_times = collections.deque(maxlen=30)
         self._odom = None                           # (pose, frame, rx)
         self._amcl = None                           # (pose, sigma, rx)
+        self._goal = None                           # (goal_id, status, text, rx) of the newest move_base goal
+        self._pubs = {}                             # topic name -> roslibpy.Topic (publishers, goal/cancel only)
         self._last_rx_any: Optional[float] = None
         self._stats: Dict[str, TopicStat] = collections.defaultdict(TopicStat)
         self._nodes: Optional[Set[str]] = None
@@ -183,6 +187,7 @@ class RobotLink:
             (c.map_topic, "nav_msgs/OccupancyGrid", c.map_throttle_ms, lambda m: self._on_map(gen, m)),
             (c.odom_topic, "nav_msgs/Odometry", 100, lambda m: self._on_odom(gen, m)),
             (c.amcl_pose_topic, "geometry_msgs/PoseWithCovarianceStamped", 0, lambda m: self._on_amcl(gen, m)),
+            (c.goal_status_topic, "actionlib_msgs/GoalStatusArray", 0, lambda m: self._on_goal_status(gen, m)),
         ]
         self._topics_objs = []
         for name, typ, throttle, cb in subs:
@@ -259,6 +264,51 @@ class RobotLink:
         except Exception as exc:
             self._note(gen, self.cfg.amcl_pose_topic, f"bad message: {exc!r}")
 
+    def _on_goal_status(self, gen, msg):
+        try:
+            if self._note(gen, self.cfg.goal_status_topic):
+                lst = msg.get("status_list") or []
+                with self._lock:
+                    if lst:
+                        g = lst[-1]
+                        self._goal = (str(g["goal_id"]["id"]), int(g["status"]), str(g.get("text", "")), time.monotonic())
+        except Exception as exc:
+            self._note(gen, self.cfg.goal_status_topic, f"bad message: {exc!r}")
+
+    # ---------------------------------------------------------------- publishing (goal / cancel only)
+    def _publish(self, topic: str, msg_type: str, payload: dict) -> bool:
+        """Publish one message. The only topics ever allowed are the goal and cancel topics: the GUI cannot send
+        velocity commands, so it cannot bypass move_base's obstacle handling."""
+        c = self.cfg
+        if topic not in (c.goal_topic, c.cancel_topic):
+            raise ValueError(f"refusing to publish to {topic}: only goals and goal cancellation are allowed")
+        import roslibpy
+        with self._lock:
+            ros, ready = self._ros, self._state == CONNECTED
+            gen = self._gen
+            top = self._pubs.get(topic)
+        if ros is None or not ready:
+            return False
+        try:
+            if top is None:
+                top = roslibpy.Topic(ros, topic, msg_type)
+                with self._lock:
+                    if self._alive(gen):
+                        self._pubs[topic] = top
+            top.publish(roslibpy.Message(payload))
+            return True
+        except Exception as exc:
+            self._note(gen, topic, f"publish failed: {exc!r}")
+            return False
+
+    def send_goal(self, goal) -> bool:
+        """Ask move_base to go to goal = (x, y, yaw) in the map frame."""
+        return self._publish(self.cfg.goal_topic, "geometry_msgs/PoseStamped", goal_message(goal, self.cfg.map_frame))
+
+    def cancel_goals(self) -> bool:
+        """Cancel every move_base goal (the robot stops). Not an e-stop: use the power switch for that."""
+        return self._publish(self.cfg.cancel_topic, "actionlib_msgs/GoalID", dict(CANCEL_ALL))
+
     # ---------------------------------------------------------------- rosapi discovery
     def _discover(self, gen: int, ros) -> None:
         def got_nodes(res):
@@ -325,4 +375,5 @@ class RobotLink:
                 stats={k: TopicStat(v.count, v.last_rx, v.last_error) for k, v in self._stats.items()},
                 nodes=set(self._nodes) if self._nodes is not None else None,
                 topics=dict(self._topics) if self._topics is not None else None,
-                discovery_error=self._disc_error, tf_frames=self._tf.frames())
+                discovery_error=self._disc_error, tf_frames=self._tf.frames(),
+                goal=self._goal[:3] if self._goal else None, goal_age=age(self._goal[3]) if self._goal else None)
