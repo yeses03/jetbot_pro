@@ -6,6 +6,7 @@ Interaction: click the map = choose a destination, then GO. Shift+drag sets the 
 from __future__ import annotations
 
 import math
+import os
 import sys
 import threading
 import time
@@ -19,6 +20,9 @@ from . import theme as T
 from .geometry import View, fit_score, heading_towards, pose_search, render_map, transform_points
 from .goals import ACTIVE, PENDING, RouteRunner, blockers
 from .link import CONNECTED, RobotLink
+from .manager_client import ManagerLink
+from .robot_panel import RobotPanel
+from .tunnel import Tunnel, TunnelError, is_loopback
 from .places import Places, map_signature
 from .status import BAD, IDLE, OK, WARN, assess
 from .teleop import (DEFAULT_ANGULAR, DEFAULT_LINEAR, MAX_ANGULAR, MAX_LINEAR, TeleopState, guard)
@@ -34,6 +38,11 @@ class App:
     def __init__(self, root: tk.Tk, cfg: cfgmod.Config):
         self.root, self.cfg = root, cfg
         self.link = RobotLink(cfg)
+        self.mgr = ManagerLink()                # the JetBot manager on the robot (start/stop software, maps)
+        self.tunnel = None
+        self._tunnel_job = None
+        self._conn_note = ""
+        self.user_var = tk.StringVar(value=cfg.ssh_user)
         self.view = View()
         self.view_fitted_for = None            # becomes True once we auto-fitted to the first map
         self._photo = None
@@ -110,12 +119,12 @@ class App:
         self.conn_dot = T.Dot(conn, 10, T.PANEL)
         self.conn_dot.pack(side="left", padx=(0, 8))
         tk.Label(conn, text="Robot", bg=T.PANEL, fg=T.MUTED, font=T.F_SMALL).pack(side="left", padx=(0, 6))
-        ttk.Entry(conn, textvariable=self.host_var, width=16).pack(side="left")
-        tk.Label(conn, text=":", bg=T.PANEL, fg=T.MUTED).pack(side="left", padx=2)
-        ttk.Entry(conn, textvariable=self.port_var, width=6).pack(side="left")
+        ttk.Entry(conn, textvariable=self.host_var, width=17).pack(side="left")
+        tk.Label(conn, text="user", bg=T.PANEL, fg=T.MUTED, font=T.F_SMALL).pack(side="left", padx=(10, 4))
+        ttk.Entry(conn, textvariable=self.user_var, width=8).pack(side="left")
         T.ActionButton(conn, "Connect", self.connect, "primary", pady=5).pack(side="left", padx=(10, 4))
         T.ActionButton(conn, "Disconnect", self.disconnect, "secondary", pady=5).pack(side="left", padx=2)
-        T.ActionButton(conn, "Save as default", self.save_defaults, "ghost", font=T.F_SMALL, pady=5).pack(side="left", padx=2)
+        T.ActionButton(conn, "More…", self.open_settings, "ghost", font=T.F_SMALL, pady=5).pack(side="left", padx=2)
 
         right = tk.Frame(bar, bg=T.PANEL)
         right.pack(side="right", padx=16)
@@ -188,10 +197,11 @@ class App:
         self.tabs = ttk.Notebook(side)
         self.tabs.grid(row=0, column=0, sticky="nsew")
         tabs = {}
-        for name in ("Navigate", "Teleop", "Pose", "Diagnostics"):
+        for name in ("Robot", "Navigate", "Teleop", "Pose", "Diagnostics"):
             sf = T.ScrollFrame(self.tabs)                       # scrolls when the window is too short for the tab
             self.tabs.add(sf, text=name)
             tabs[name] = sf.body
+        self.robot = RobotPanel(self, tabs["Robot"])
         self._tab_navigate(tabs["Navigate"])
         self._tab_teleop(tabs["Teleop"])
         self._tab_pose(tabs["Pose"])
@@ -326,18 +336,110 @@ class App:
         try:
             port = int(self.port_var.get())
         except ValueError:
-            self.warn_lbl.configure(text="Port must be a number.")
+            self.warn_lbl.configure(text="Port must be a number (under More).")
             return
         if not host:
-            self.warn_lbl.configure(text="Enter the robot's IP or hostname.")
+            self.warn_lbl.configure(text="Enter the robot's IP address or hostname.")
             return
         self.cfg.host, self.cfg.port = host, port
+        self.cfg.ssh_user = self.user_var.get().strip() or "nvidia"
         self.view_fitted_for = None
-        self.link.connect(host, port)
+        self._close_connection()
+        if is_loopback(host):                                   # already tunnelled by hand: rosbridge only (the manager needs a token)
+            self.link.connect(host, port)
+            token = os.environ.get("JETBOT_MANAGER_TOKEN")
+            if token:
+                self.mgr.connect(int(os.environ.get("JETBOT_MANAGER_PORT", self.cfg.remote_mgr_port)), token)
+            return
+        self._conn_note = f"Opening an SSH tunnel to {host} ..."
+        job = {"state": "running"}
+        self._tunnel_job = job
+        user, key = self.cfg.ssh_user, self.cfg.ssh_key
+        ros_port, mgr_port = self.cfg.remote_ros_port, self.cfg.remote_mgr_port
+
+        def work():
+            try:
+                t = Tunnel(host, user, key, ros_port, mgr_port)
+                t.open()
+                job["tunnel"] = t
+                try:
+                    job["token"] = t.token()
+                except TunnelError as exc:
+                    job["token_error"] = str(exc)
+            except TunnelError as exc:
+                job["error"] = str(exc)
+            except Exception as exc:
+                job["error"] = f"{type(exc).__name__}: {exc}"
+            job["state"] = "done"
+        threading.Thread(target=work, daemon=True, name="ssh-tunnel").start()
+
+    def _poll_tunnel(self):
+        """Pick up the result of the background tunnel setup, and notice a tunnel that died."""
+        job = self._tunnel_job
+        if job is not None and job["state"] == "done":
+            self._tunnel_job = None
+            if job.get("error"):
+                self._conn_note = job["error"]
+            else:
+                self.tunnel = job["tunnel"]
+                self.link.connect("127.0.0.1", self.tunnel.local_ros)
+                if job.get("token"):
+                    self.mgr.connect(self.tunnel.local_mgr, job["token"])
+                    self._conn_note = ""
+                else:
+                    self._conn_note = job.get("token_error", "")
+        if self.tunnel is not None and not self.tunnel.alive():
+            self._conn_note = "The SSH tunnel dropped (network change or the robot restarted). Press Connect."
+            self.tunnel = None
+
+    def _close_connection(self):
+        self._teleop_off("disconnected")
+        self._tunnel_job = None
+        self._conn_note = ""
+        self.mgr.disconnect()
+        self.link.disconnect()
+        if self.tunnel is not None:
+            self.tunnel.close()
+            self.tunnel = None
 
     def disconnect(self):
-        self._teleop_off("disconnected")
-        self.link.disconnect()
+        self._close_connection()
+
+    def open_settings(self):
+        win = tk.Toplevel(self.root)
+        win.title("Connection settings")
+        win.configure(bg=T.PANEL)
+        win.transient(self.root)
+        vars_ = {"ssh_key": tk.StringVar(value=self.cfg.ssh_key), "port": tk.StringVar(value=self.port_var.get()),
+                 "remote_ros_port": tk.StringVar(value=str(self.cfg.remote_ros_port)),
+                 "remote_mgr_port": tk.StringVar(value=str(self.cfg.remote_mgr_port))}
+        rows = (("SSH key file (optional)", "ssh_key"), ("rosbridge port, direct connection", "port"),
+                ("rosbridge port on the robot", "remote_ros_port"), ("manager port on the robot", "remote_mgr_port"))
+        for i, (label, key) in enumerate(rows):
+            tk.Label(win, text=label, bg=T.PANEL, fg=T.MUTED, font=T.F_SMALL).grid(row=i, column=0, sticky="w", padx=14, pady=(12 if i == 0 else 6, 0))
+            ttk.Entry(win, textvariable=vars_[key], width=34).grid(row=i, column=1, padx=14, pady=(12 if i == 0 else 6, 0))
+        tk.Label(win, bg=T.PANEL, fg=T.MUTED, font=T.F_SMALL, justify="left", wraplength=420,
+                 text="Enter the robot's address and user in the header and press Connect: the console opens an SSH tunnel itself (it uses your ssh "
+                      "agent, so load your key with ssh-add) and reads the manager's token over it. Use 127.0.0.1 only if you tunnelled by hand."
+                 ).grid(row=len(rows), column=0, columnspan=2, padx=14, pady=12)
+
+        def save():
+            try:
+                self.cfg.ssh_key = vars_["ssh_key"].get().strip()
+                self.port_var.set(vars_["port"].get().strip())
+                self.cfg.remote_ros_port = int(vars_["remote_ros_port"].get())
+                self.cfg.remote_mgr_port = int(vars_["remote_mgr_port"].get())
+                self.cfg.port = int(self.port_var.get())
+            except ValueError:
+                messagebox.showwarning("Connection settings", "Ports must be numbers.", parent=win)
+                return
+            self.cfg.host, self.cfg.ssh_user = self.host_var.get().strip(), self.user_var.get().strip() or "nvidia"
+            cfgmod.save_local(self.cfg)
+            win.destroy()
+        row = tk.Frame(win, bg=T.PANEL)
+        row.grid(row=len(rows) + 1, column=0, columnspan=2, pady=(0, 14))
+        T.ActionButton(row, "Save as default", save, "primary", pady=6).pack(side="left", padx=4)
+        T.ActionButton(row, "Close", win.destroy, "secondary", pady=6).pack(side="left", padx=4)
 
     def save_defaults(self):
         self.cfg.host, self.cfg.port = self.host_var.get().strip(), int(self.port_var.get() or 9090)
@@ -348,7 +450,10 @@ class App:
         self._teleop_off("window closed")
         for _ in range(3):
             self.link.send_velocity(0.0, 0.0)
+        self.mgr.disconnect()
         self.link.disconnect()
+        if self.tunnel is not None:
+            self.tunnel.close()
         self.root.destroy()
 
     def _size(self):
@@ -445,11 +550,15 @@ class App:
         try:
             snap = self.link.snapshot()
             a = assess(snap, self.cfg)
+            self._poll_tunnel()
+            ms = self.mgr.snapshot()
             self._expire_motion()
             self._update_chips(snap, a)
             self._update_goals(snap, a)
             self._update_teleop(snap, a)
             self._update_reloc(snap)
+            self._sync_places(ms)
+            self.robot.update(ms, a)
             self._draw_map(snap, a)
             self._draw_lidar(snap, a)
             self._update_text(snap, a)
@@ -472,8 +581,8 @@ class App:
         on = self.armed.get()
         self.motion_btn.configure(text="MOTION  ON" if on else "MOTION  OFF")
         self.motion_btn.set_variant("success" if on else "secondary")
-        tip = self._tele_note
-        self.warn_lbl.configure(text="\n".join(["⚠ " + w for w in a.warnings] + ([tip] if tip else [])))
+        extra = [t for t in (self._conn_note, self._tele_note) if t]
+        self.warn_lbl.configure(text="\n".join(["⚠ " + w for w in a.warnings] + extra))
 
     # ================================================================== goals
     def _update_goals(self, snap, a):
@@ -657,6 +766,15 @@ class App:
                                 fg=T.BAD if why else T.MUTED)
 
     # ================================================================== saved places
+    def _sync_places(self, ms):
+        """Places belong to a map: use the set for the map the robot is running (or "default" without a manager)."""
+        scope = (ms.status or {}).get("active_map") if ms.connected else None
+        scope = scope or Places.DEFAULT_SCOPE
+        if scope != self.places.scope:
+            self.places.use(scope)
+            self.place_box.configure(values=self.places.names())
+            self.place_var.set("")
+
     def _sig(self):
         m = self.link.snapshot().map
         return map_signature(m) if m else None
