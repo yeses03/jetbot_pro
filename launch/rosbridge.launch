@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<!-- Link for the desktop dashboard (gui/). rosbridge has NO authentication, so it listens on localhost only and
+     the dashboard reaches it through an SSH tunnel:
+         ssh -N -L 9090:127.0.0.1:9090 nvidia@<jetson-ip>      then point the GUI at host 127.0.0.1
+     Pass  address:=0.0.0.0  only on a network you fully trust. Needs the package ros-melodic-rosbridge-suite. -->
+<launch>
+  <arg name="address" default="127.0.0.1"/>
+  <arg name="port" default="9090"/>
+  <include file="$(find rosbridge_server)/launch/rosbridge_websocket.launch">
+    <arg name="address" value="$(arg address)"/>
+    <arg name="port" value="$(arg port)"/>
+  </include>
+</launch>
