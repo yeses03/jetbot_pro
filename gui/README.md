@@ -4,7 +4,7 @@ A desktop GUI (Python + Tkinter) that shows what the JetBot is actually doing: m
 It runs on your Mac/Ubuntu VM and talks to the **ROS 1 Melodic** robot over the network through **rosbridge**.
 No ROS is needed on the GUI machine, and nothing on the robot is migrated to ROS 2.
 
-**What it can and cannot do to the robot.** It can send **goals** to `move_base` and cancel them (section "Sending goals"). It **never publishes velocity commands**, has no manual driving, and cannot bypass move_base's obstacle handling; the link refuses to publish to any topic except the goal and cancel topics (tested). There is no emergency stop: Cancel stops move_base's goal, the **power switch is the real stop**.
+**What it can and cannot do to the robot.** It can send **goals** to `move_base` and cancel them (section "Sending goals"). It **never publishes velocity commands**, has no manual driving, and cannot bypass move_base's obstacle handling; the link refuses to publish to any topic except the goal, goal-cancel and AMCL initial-pose topics (tested). There is no emergency stop: Cancel stops move_base's goal, the **power switch is the real stop**.
 
 Adapted (not copied) from the Acrux GUI; none of its ROS 2 / Nav2 / SSH / credential code is used.
 
@@ -78,6 +78,20 @@ cd gui && .venv/bin/python -m jetbot_gui          # config.default.json points a
 ```
 The Jetson also needs the navigation stack running with `cmd_vel_topic:=cmd_vel` for goals to move the robot (see `launch/navigate.launch`).
 
+## Fixing a wrong pose: "Check pose from scan"
+
+AMCL can drift on long moves, and it is always wrong after you lift or push the robot (odometry cannot see that). The *Pose vs scan*
+chip turns red when that happens and the goal buttons are blocked. To fix it from the dashboard:
+1. Put the robot where it is going to stay, still, with nobody next to it (a person in the scan lowers the fit).
+2. Press **Check pose from scan**. It searches for the pose where the LiDAR scan fits the saved map best, near the reported pose, or
+   across the **whole room** if you tick *Search the whole room* (use that after carrying the robot). It takes a second or two.
+3. Read the result: the suggested pose (cyan cross on the map) and its fit. It is only offered when the fit is good (>= 70%) and
+   no other place fits almost as well; a plain rectangular room can look the same turned 180 degrees, and the panel says AMBIGUOUS then.
+4. If the cross is where the robot really is, press **Apply to AMCL** and confirm. This publishes AMCL's initial pose; it does not move
+   the robot, but every goal afterwards is planned from it. Check that *Pose vs scan* turns green.
+
+The link may publish to exactly three topics: the goal, goal cancel, and the AMCL initial pose. It still never publishes velocity commands.
+
 ## Configuration
 
 Order: built-in defaults < `config.default.json` < `config.local.json` (git-ignored) < command-line flags.
@@ -112,7 +126,7 @@ Map controls: wheel = zoom, drag = pan, **Fit**, **Centre on robot**. The cursor
 cd gui
 python -I -m unittest discover -s tests -v
 ```
-`test_goals.py` checks the goal message, the safety gate, the route runner (sends the next leg only after success, stops at the first failure), that the link refuses every topic except goal/cancel, that no velocity topic appears anywhere in the package, and that a goal and a cancel reach a fake rosbridge server correctly. `test_places.py` checks saving, name validation, atomic writes, the different-map refusal, and the go-to-place flow with a declined/accepted confirmation. `test_fit.py` checks the pose-vs-scan indicator on a synthetic room and on **real scans captured on the robot** (`tests/fixtures/`: the cleaned living-room map and three scans, with the pose AMCL reported and the pose a scan-to-map search found). `test_ui_smoke.py` builds the real Tk window, feeds it that real data and renders one refresh; it skips when there is no display.
+`test_goals.py` checks the goal message, the safety gate, the route runner (sends the next leg only after success, stops at the first failure), that the link refuses every topic except goal/cancel, that no velocity topic appears anywhere in the package, and that a goal and a cancel reach a fake rosbridge server correctly. `test_reloc.py` checks the scan-to-map pose search on real scans (it recovers the 0.35 m and 30 degree errors AMCL made, with and without a guess, and reports ambiguity) and the initial-pose message; the UI tests run the check-then-apply flow. `test_places.py` checks saving, name validation, atomic writes, the different-map refusal, and the go-to-place flow with a declined/accepted confirmation. `test_fit.py` checks the pose-vs-scan indicator on a synthetic room and on **real scans captured on the robot** (`tests/fixtures/`: the cleaned living-room map and three scans, with the pose AMCL reported and the pose a scan-to-map search found). `test_ui_smoke.py` builds the real Tk window, feeds it that real data and renders one refresh; it skips when there is no display.
 `test_core.py` covers map orientation/origin/rotation, scan invalid-value handling, TF composition, staleness and the
 status rules. `test_integration.py` runs the real roslibpy client against a **fake rosbridge server that exists only inside
 the test** (connect-before-server-exists, live data, server dies → data goes stale, server returns → recovers). The GUI itself
