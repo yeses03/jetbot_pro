@@ -1,11 +1,10 @@
-# JetBot Pro dashboard (Stage 2: read-only)
+# JetBot Pro dashboard (map, LiDAR, pose, and goals for move_base)
 
 A desktop GUI (Python + Tkinter) that shows what the JetBot is actually doing: map, LiDAR, robot pose, link health.
 It runs on your Mac/Ubuntu VM and talks to the **ROS 1 Melodic** robot over the network through **rosbridge**.
 No ROS is needed on the GUI machine, and nothing on the robot is migrated to ROS 2.
 
-**This build cannot move the robot.** It only subscribes and queries; it never publishes. Manual drive, goals,
-waypoints and e-stop are later stages (see "Roadmap") and wait until the command path is verified on the robot.
+**What it can and cannot do to the robot.** It can send **goals** to `move_base` and cancel them (section "Sending goals"). It **never publishes velocity commands**, has no manual driving, and cannot bypass move_base's obstacle handling; the link refuses to publish to any topic except the goal and cancel topics (tested). There is no emergency stop: Cancel stops move_base's goal, the **power switch is the real stop**.
 
 Adapted (not copied) from the Acrux GUI; none of its ROS 2 / Nav2 / SSH / credential code is used.
 
@@ -45,6 +44,32 @@ python -m jetbot_gui --host 127.0.0.1
 ```
 (`python3-tk` is a system package. On Homebrew Python for macOS use `brew install python-tk`.)
 
+## Sending goals (moves the robot: read this first)
+
+The *Goals* panel is on the right. To send the robot somewhere:
+1. Tick **Click map to set a goal**, then click the map where you want it to go. **Drag** before releasing to set the heading
+   (a plain click faces the robot towards the point). An orange marker shows the pending goal.
+2. Tick **Arm goals**. Nothing can be sent while this is off, and it switches itself off after every send.
+3. Press **Send goal** and confirm the dialog. The robot WILL move: keep clear and keep a hand near the power switch.
+4. **CANCEL GOAL (stop)** cancels the goal and any route at any time. It is not an emergency stop.
+
+**Routes:** *Add to route* queues the pending goal (green numbered markers); *Run route* sends the legs one at a time and only
+moves on when move_base reports the previous goal reached. The first failure, cancellation, or failed safety check stops it;
+it never retries.
+
+**The safety gate.** Send and Run are blocked, with the reason shown under the buttons, unless: goals are armed; the link is up;
+the map pose is live; `move_base` is running; the robot's pose agrees with the LiDAR scan (*Pose vs scan* not red); AMCL's
+uncertainty is small; and no goal is already active. The gate cannot see everything: it does not know if a person or pet is in the
+way, and it cannot judge a bad route. It is a check on localisation, not on the world.
+
+**Setup each time:** rosbridge has no authentication and listens on every interface (see robot_side/ROBOT_SETUP.md section 3), so
+apply the firewall rule on the Jetson, confirm `nc -vz <jetson-ip> 9090` fails from your computer, open the SSH tunnel, then start the GUI:
+```bash
+ssh -N -L 9090:127.0.0.1:9090 nvidia@<jetson-ip> &
+cd gui && .venv/bin/python -m jetbot_gui          # config.default.json points at 127.0.0.1
+```
+The Jetson also needs the navigation stack running with `cmd_vel_topic:=cmd_vel` for goals to move the robot (see `launch/navigate.launch`).
+
 ## Configuration
 
 Order: built-in defaults < `config.default.json` < `config.local.json` (git-ignored) < command-line flags.
@@ -79,7 +104,7 @@ Map controls: wheel = zoom, drag = pan, **Fit**, **Centre on robot**. The cursor
 cd gui
 python -I -m unittest discover -s tests -v
 ```
-`test_fit.py` checks the pose-vs-scan indicator on a synthetic room and on **real scans captured on the robot** (`tests/fixtures/`: the cleaned living-room map and three scans, with the pose AMCL reported and the pose a scan-to-map search found). `test_ui_smoke.py` builds the real Tk window, feeds it that real data and renders one refresh; it skips when there is no display.
+`test_goals.py` checks the goal message, the safety gate, the route runner (sends the next leg only after success, stops at the first failure), that the link refuses every topic except goal/cancel, that no velocity topic appears anywhere in the package, and that a goal and a cancel reach a fake rosbridge server correctly. `test_fit.py` checks the pose-vs-scan indicator on a synthetic room and on **real scans captured on the robot** (`tests/fixtures/`: the cleaned living-room map and three scans, with the pose AMCL reported and the pose a scan-to-map search found). `test_ui_smoke.py` builds the real Tk window, feeds it that real data and renders one refresh; it skips when there is no display.
 `test_core.py` covers map orientation/origin/rotation, scan invalid-value handling, TF composition, staleness and the
 status rules. `test_integration.py` runs the real roslibpy client against a **fake rosbridge server that exists only inside
 the test** (connect-before-server-exists, live data, server dies → data goes stale, server returns → recovers). The GUI itself
@@ -98,7 +123,8 @@ never fabricates data. Requires `pip install websockets` for that one test.
 * **Large maps are slow** – rosbridge sends the map as JSON; very large grids are heavy. Not yet tested on the real robot.
 * **Localiser: "unknown"** – `rosapi` isn't reachable (it is started by `rosbridge_websocket.launch`).
 
-## Roadmap (not implemented)
+## Roadmap
 
-Stage 3 (manual drive, `move_base` goals/cancel, e-stop) and Stage 4 (waypoints, home, camera, battery) are intentionally
-absent; the facts that gate them are in ROBOT_SETUP.md ("To verify before Stage 3").
+Done: read-only dashboard, pose-vs-scan check, map-click goals, goal cancel, sequential routes. Not built, on purpose:
+manual driving and an emergency stop (they need a velocity multiplexer such as `twist_mux` on the robot, because `move_base` and any
+GUI teleop would otherwise fight over `/cmd_vel`, and the facts that gate them are in ROBOT_SETUP.md), camera and battery telemetry.
