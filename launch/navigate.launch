@@ -10,7 +10,7 @@
   <arg name="initial_x" default="0.0"/>
   <arg name="initial_y" default="0.0"/>
   <arg name="initial_a" default="0.0"/>
-  <arg name="map_file" default="$(env HOME)/maps/livingroom_20261102_0830_start_cleaned.yaml"/>
+  <arg name="map_file" default="$(env HOME)/maps/livingroom_20261102_0830_walled.yaml"/>
 
   <include file="$(find jetbot_pro)/launch/localize.launch">
     <arg name="linear_correction" value="$(arg linear_correction)"/>
