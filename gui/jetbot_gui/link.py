@@ -17,6 +17,7 @@ from typing import Dict, Optional, Set
 from .config import Config
 from .geometry import (CANCEL_ALL, MapData, initial_pose_message, Pose2D, ScanData, TfBuffer, clean_frame, goal_message, map_from_message,
                        quat_to_yaw, scan_from_message)
+from .teleop import clamp_command
 
 # connection states
 DISCONNECTED, CONNECTING, CONNECTED = "disconnected", "connecting", "connected"
@@ -280,8 +281,8 @@ class RobotLink:
         """Publish one message. The only topics ever allowed are the goal and cancel topics: the GUI cannot send
         velocity commands, so it cannot bypass move_base's obstacle handling."""
         c = self.cfg
-        if topic not in (c.goal_topic, c.cancel_topic, c.initialpose_topic):
-            raise ValueError(f"refusing to publish to {topic}: only goals, goal cancellation and the AMCL initial pose are allowed")
+        if topic not in (c.goal_topic, c.cancel_topic, c.initialpose_topic, c.cmd_vel_topic):
+            raise ValueError(f"refusing to publish to {topic}: only goals, goal cancellation, the AMCL initial pose and teleop velocity are allowed")
         import roslibpy
         with self._lock:
             ros, ready = self._ros, self._state == CONNECTED
@@ -309,6 +310,12 @@ class RobotLink:
         """Tell AMCL where the robot really is, pose = (x, y, yaw) in the map frame. Moves nothing by itself."""
         return self._publish(self.cfg.initialpose_topic, "geometry_msgs/PoseWithCovarianceStamped",
                              initial_pose_message(pose, self.cfg.map_frame))
+
+    def send_velocity(self, vx: float, wz: float) -> bool:
+        """Teleop only: one velocity command (m/s, rad/s), clamped here to the hard caps whatever the caller passes."""
+        vx, wz = clamp_command(vx, wz)
+        return self._publish(self.cfg.cmd_vel_topic, "geometry_msgs/Twist",
+                             {"linear": {"x": vx, "y": 0.0, "z": 0.0}, "angular": {"x": 0.0, "y": 0.0, "z": wz}})
 
     def cancel_goals(self) -> bool:
         """Cancel every move_base goal (the robot stops). Not an e-stop: use the power switch for that."""

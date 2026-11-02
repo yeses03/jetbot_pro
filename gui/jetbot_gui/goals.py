@@ -20,11 +20,13 @@ PENDING, ACTIVE, PREEMPTED, SUCCEEDED, ABORTED, REJECTED = 0, 1, 2, 3, 4, 5
 TERMINAL_FAILURES = {PREEMPTED, ABORTED, REJECTED, 8}      # 8 = RECALLED
 
 
-def blockers(a: Assessment, s: Snapshot, cfg: Config, armed: bool) -> List[str]:
+def blockers(a: Assessment, s: Snapshot, cfg: Config, armed: bool, teleop_on: bool = False) -> List[str]:
     """Reasons a goal must NOT be sent right now. Empty list = allowed."""
     why: List[str] = []
     if not armed:
-        why.append("goals are not armed (tick 'Arm goals')")
+        why.append("motion is not enabled (switch MOTION on)")
+    if teleop_on:
+        why.append("teleop is on (stop it before sending goals)")
     if s.conn_state != CONNECTED:
         why.append("not connected to the robot")
     if not a.pose_live_in_map:

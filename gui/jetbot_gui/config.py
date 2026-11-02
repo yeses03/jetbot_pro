@@ -29,6 +29,7 @@ class Config:
     goal_topic: str = "/move_base_simple/goal"
     cancel_topic: str = "/move_base/cancel"
     initialpose_topic: str = "/initialpose"            # tells AMCL where the robot really is; not a motion command
+    cmd_vel_topic: str = "/cmd_vel"                    # velocity commands: ONLY the teleop pad uses this, capped and guarded
     goal_status_topic: str = "/move_base/status"
     # Frames (jetbot_pro launch files use base_footprint, odom, map, laser_frame).
     map_frame: str = "map"
