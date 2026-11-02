@@ -15,12 +15,20 @@ On the project's Jetson (checked 2026-11-02) it is **not installed**: `ros-melod
 ```bash
 source /opt/ros/melodic/setup.bash
 source ~/catkin_ws/devel/setup.bash
-roslaunch jetbot_pro rosbridge.launch                      # wraps rosbridge_websocket, bound to 127.0.0.1:9090, also starts rosapi
+roslaunch jetbot_pro rosbridge.launch                      # wraps rosbridge_websocket (listens on ALL interfaces, see section 3), also starts rosapi
 # from your computer:  ssh -N -L 9090:127.0.0.1:9090 nvidia@<jetson-ip>   and point the GUI at host 127.0.0.1
 ```
 Do not start a second roscore/jetbot/lidar/SLAM; rosbridge just joins the running ROS master.
 
-## 3. Security note
+## 3. Security note (read before starting rosbridge)
+**Verified 2026-11-02 on the project's Jetson: with `rosbridge_server` 0.11.16 the `address` launch argument does NOT restrict the
+listening interface.** It listened on `0.0.0.0:9090` even with `address:=127.0.0.1`, so the robot's whole network could publish to
+`/cmd_vel`. It was up for about 30 s before being stopped. Block outside access first, on the Jetson:
+```bash
+sudo iptables -I INPUT -p tcp --dport 9090 ! -i lo -j DROP     # not persistent across reboots
+```
+then check from another machine that `nc -vz <jetson-ip> 9090` fails, and only then start rosbridge and use the SSH tunnel.
+
 rosbridge has **no authentication**. Anyone on the same network can publish to any topic, including `/cmd_vel`.
 Stage 2 of the GUI only reads, but the server itself is open. Use a trusted network, stop rosbridge when not needed, and
 decide on firewalling (`ufw allow from <your-ip> to any port 9090`) before the control stage.

@@ -51,7 +51,7 @@ Order: built-in defaults < `config.default.json` < `config.local.json` (git-igno
 The **Save as default** button writes `config.local.json`. Every topic and frame name is a setting
 (`--map-topic`, `--scan-topic`, `--odom-topic`, `--amcl-pose-topic`, `--map-frame`, `--odom-frame`, `--base-frame`).
 Defaults come from this repo's launch files: `/map`, `/scan`, `/odom`, `/amcl_pose`, frames `map`, `odom`, `base_footprint`.
-The default host is `127.0.0.1`: rosbridge is started by `launch/rosbridge.launch` bound to localhost, and you reach it through an SSH tunnel to the Jetson (its address changes, it was .108 and then .107). Change the host in the toolbar or `config.local.json` if you connect directly on a trusted network.
+The default host is `127.0.0.1`: rosbridge is started by `launch/rosbridge.launch`; **it listens on all interfaces whatever `address` says, so block port 9090 from outside with a firewall rule first (robot_side/ROBOT_SETUP.md section 3)**, then reach it through an SSH tunnel to the Jetson (its address changes, it was .108 and then .107). Change the host in the toolbar or `config.local.json` if you connect directly on a trusted network.
 
 ## What the indicators mean
 
