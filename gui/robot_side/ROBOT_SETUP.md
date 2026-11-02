@@ -25,7 +25,7 @@ Do not start a second roscore/jetbot/lidar/SLAM; rosbridge just joins the runnin
 listening interface.** It listened on `0.0.0.0:9090` even with `address:=127.0.0.1`, so the robot's whole network could publish to
 `/cmd_vel`. It was up for about 30 s before being stopped. Block outside access first, on the Jetson:
 ```bash
-sudo iptables -I INPUT -p tcp --dport 9090 ! -i lo -j DROP     # not persistent across reboots
+sudo iptables -I INPUT -p tcp -m tcp --destination-port 9090 ! -i lo -j DROP     # not persistent across reboots
 ```
 then check from another machine that `nc -vz <jetson-ip> 9090` fails, and only then start rosbridge and use the SSH tunnel.
 
