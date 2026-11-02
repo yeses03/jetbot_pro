@@ -54,6 +54,7 @@ Nothing here claims the robot navigates reliably. See section 9 for what remains
 - **Two real localization failures [measured by scan-to-map fit]:**
   1. After a 2 m navigation leg AMCL's x was about **0.35–0.4 m too far ahead** (scan fit best at x≈1.43, AMCL 1.80). The real rear wall, drawn at the wrong map position, made the goal cell lethal and the return goal failed. Re-seeding with `initial_x:=1.45` and the new weights brought AMCL within 2 cm of the scan fit **at rest**.
   2. During a 180° in-place turn at navigation speed AMCL's heading ended about **30° off** (scan fit 192°, AMCL 161°); wheel odometry reported −221° for a turn of about −168°, a rotation over-read of about 30%. Result: slanted-wall costmap, "no valid plan", safe abort.
+- **Open question [measured, unexplained]:** after re-seeding AMCL at (1.45, 0.15), the scan fit still put the best y at about 0.30, 0.12 m from AMCL's 0.18, while x agreed within 2 cm. Either AMCL has a lateral error the walls do not correct (the room is a long box), or the fit's y estimate is weak. Not resolved.
 - **Ground-truth method that worked:** slide the live `/scan` over the saved PGM and maximise the fraction of scan points within 5 cm of a map wall (about 80–89% at the true pose, 31–58% at a wrong one). Hand tape measurements and AMCL itself were each biased at times; the scan fit was consistent with the rear-wall range and with the costmap evidence.
 
 ## 7. Odometry calibration (the main unresolved problem)
@@ -129,6 +130,12 @@ Nothing here claims the robot navigates reliably. See section 9 for what remains
 7. **Calibrate odometry** using scan-to-map fits as ground truth: one straight drive and one slow spin at the speeds navigation will use; adjust `linear_correction` and `angular_correction` one at a time, re-test each.
 8. Check AMCL heading and position after each leg (scan-to-map fit), use `request_nomotion_update` at rest.
 9. Dry-run `move_base`; then supervised real goals, shortest first, with the power switch in hand and the cancel command ready: `rostopic pub -1 /move_base/cancel actionlib_msgs/GoalID '{}'`.
+
+## 11b. Tools added after the session (offline, no robot motion)
+
+- `tools/scan_dump.py` runs on the Jetson (read-only) and prints a merged scan as robot-frame JSON; `tools/scan_map_fit.py` slides it over a saved map and reports the best pose and the fit at a guessed pose. On the session's data it reproduces the 0.39 m x error (best x 1.45 against AMCL's 1.80).
+- The dashboard (`gui/`) now has a *Pose vs scan* chip using the same fit, tested on real scans (see its README). It has never been run against the live robot: rosbridge is not installed on the Jetson and installing it needs a `sudo` password.
+- Commits are local on branch `claude/jetbot-diagnostics`, not pushed.
 
 ## 12. Deliverable files (all in the repo working tree, uncommitted unless stated)
 
