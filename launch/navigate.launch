@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<!-- Localization (AMCL) plus move_base for the living-room map, using config/living_room.
+     SAFE BY DEFAULT: move_base publishes to /cmd_vel_dry, which the chassis does not read, so the wheels cannot move.
+     Real motion needs an explicit  cmd_vel_topic:=cmd_vel  and a human-supervised test. -->
+<launch>
+  <arg name="linear_correction" default="1.4"/>
+  <arg name="cmd_vel_topic" default="cmd_vel_dry"/>
+  <!-- Where the robot really is when this launch starts (map frame). Default = the mapping start line. -->
+  <arg name="initial_x" default="0.0"/>
+  <arg name="initial_y" default="0.0"/>
+  <arg name="initial_a" default="0.0"/>
+  <arg name="map_file" default="$(env HOME)/maps/livingroom_20261102_0830_start_cleaned.yaml"/>
+
+  <include file="$(find jetbot_pro)/launch/localize.launch">
+    <arg name="linear_correction" value="$(arg linear_correction)"/>
+    <arg name="map_file" value="$(arg map_file)"/>
+    <arg name="amcl_update_min_d" value="0.05"/>
+    <arg name="amcl_update_min_a" value="0.1"/>
+    <arg name="amcl_laser_max_beams" value="60"/>
+    <arg name="amcl_z_hit" value="0.9"/>
+    <arg name="amcl_z_rand" value="0.1"/>
+    <arg name="initial_x" value="$(arg initial_x)"/>
+    <arg name="initial_y" value="$(arg initial_y)"/>
+    <arg name="initial_a" value="$(arg initial_a)"/>
+  </include>
+
+  <node pkg="move_base" type="move_base" respawn="false" name="move_base" output="screen" clear_params="true">
+    <remap from="cmd_vel" to="$(arg cmd_vel_topic)"/>
+    <rosparam file="$(find jetbot_pro)/config/living_room/costmap_common_params.yaml" command="load" ns="global_costmap" />
+    <rosparam file="$(find jetbot_pro)/config/living_room/costmap_common_params.yaml" command="load" ns="local_costmap" />
+    <rosparam file="$(find jetbot_pro)/config/living_room/local_costmap_params.yaml" command="load" />
+    <rosparam file="$(find jetbot_pro)/config/living_room/global_costmap_params.yaml" command="load" />
+    <rosparam file="$(find jetbot_pro)/config/living_room/teb_local_planner_params.yaml" command="load" />
+    <rosparam file="$(find jetbot_pro)/config/living_room/base_global_planner_param.yaml" command="load" />
+    <rosparam file="$(find jetbot_pro)/config/living_room/move_base_params.yaml" command="load" />
+  </node>
+</launch>
