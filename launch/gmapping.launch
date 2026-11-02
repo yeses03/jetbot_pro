@@ -25,10 +25,12 @@
     <param name="temporalUpdate" value="-1.0"/>
     <param name="resampleThreshold" value="0.5"/>
     <param name="particles" value="8"/>
-    <param name="xmin" value="-50.0"/>
-    <param name="ymin" value="-50.0"/>
-    <param name="xmax" value="50.0"/>
-    <param name="ymax" value="50.0"/>
+    <!-- Initial map extent in metres around the robot's start pose (= map origin). GMapping still grows the map in
+         10 m steps if scan endpoints leave this box. Was +/-50 (1984x1984 cells, 98% unknown); +/-8 gives 320x320. -->
+    <param name="xmin" value="-8.0"/>
+    <param name="ymin" value="-8.0"/>
+    <param name="xmax" value="8.0"/>
+    <param name="ymax" value="8.0"/>
     <param name="delta" value="0.05"/>
     <param name="llsamplerange" value="0.01"/>
     <param name="llsamplestep" value="0.01"/>
