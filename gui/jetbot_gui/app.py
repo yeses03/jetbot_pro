@@ -616,6 +616,9 @@ class App:
         if e.keysym == "Escape" and self.teleop_on:
             self._teleop_off("Esc")
             return "break"
+        if e.keysym in ("Return", "KP_Enter") and not self.teleop_on and self.pending:       # Enter = GO
+            self.send_pending()
+            return "break"
         if e.keysym == "space" and not self.teleop_on:               # Space also acts as a STOP for goals
             self.cancel_all()
             return None

@@ -173,6 +173,23 @@ class ClickToGoTests(unittest.TestCase):
         finally:
             root.destroy()
 
+    def test_enter_acts_as_go_but_only_through_the_same_gate(self):
+        root, app = make_app(self)
+        try:
+            sent = []
+            app.link.send_goal = lambda g: sent.append(g) or True
+            app.link.snapshot = lambda: good_snap()
+            app.pending = (1.0, 1.0, 0.0)
+            app.tick()
+            app._key_down(Ev(keysym="Return"))
+            self.assertEqual(sent, [])                              # MOTION is off
+            app.set_motion(True)
+            app.tick()
+            self.assertEqual(app._key_down(Ev(keysym="Return")), "break")
+            self.assertEqual(len(sent), 1)
+        finally:
+            root.destroy()
+
     def test_a_mislocalised_robot_cannot_be_sent_anywhere(self):
         root, app = make_app(self)
         try:
