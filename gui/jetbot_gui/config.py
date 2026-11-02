@@ -17,7 +17,11 @@ LOCAL_FILE = GUI_DIR / "config.local.json"
 @dataclass
 class Config:
     host: str = ""
-    port: int = 9090
+    port: int = 9090                                   # rosbridge port when connecting directly (no SSH tunnel)
+    ssh_user: str = "nvidia"
+    ssh_key: str = ""                                   # optional key file; empty = use your ssh agent / default keys
+    remote_ros_port: int = 9090                        # on the robot, reached through the tunnel
+    remote_mgr_port: int = 9091
     # Topics. Defaults match the repo's launch files; verify on your robot (see README).
     map_topic: str = "/map"
     scan_topic: str = "/scan"
