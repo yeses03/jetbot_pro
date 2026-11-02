@@ -12,6 +12,7 @@ from PIL import ImageTk
 from . import config as cfgmod
 from .geometry import View, heading_towards, render_map, transform_points
 from .goals import RouteRunner, blockers
+from .places import Places, map_signature
 from .link import CONNECTED, RobotLink
 from .status import BAD, IDLE, OK, WARN, assess
 
@@ -43,6 +44,15 @@ class App:
         self.route = []                               # goals queued for Run route
         self.runner = RouteRunner()
         self._gate = []                               # why a goal is blocked right now (empty = allowed)
+        self.places = Places()                        # saved named places (places.local.json)
+        self._places_ok = True                        # False when the places belong to a different map
+        self.place_var = tk.StringVar()
+        self.name_var = tk.StringVar()
+        try:
+            self.places.load()
+        except Exception as exc:
+            self.places = Places()
+            print(f'could not read {self.places.path.name}: {exc}', file=sys.stderr)
 
         root.title("JetBot Pro dashboard (goals only, no manual driving)")
         root.configure(bg=BG)
@@ -144,6 +154,21 @@ class App:
         self.run_btn = ttk.Button(row2, text="Run route", command=self.run_route)
         self.run_btn.pack(side="left")
         ttk.Button(row2, text="Clear route", command=self.clear_route).pack(side="left", padx=4)
+        ttk.Separator(gb).pack(fill="x", padx=6, pady=3)
+        tk.Label(gb, text="Saved places", bg=BG, fg=FG, font=("TkDefaultFont", 9, "bold")).pack(anchor="w", padx=6)
+        self.place_box = ttk.Combobox(gb, textvariable=self.place_var, state="readonly", values=self.places.names(), width=30)
+        self.place_box.pack(anchor="w", padx=6)
+        r3 = ttk.Frame(gb)
+        r3.pack(fill="x", padx=6, pady=2)
+        ttk.Button(r3, text="Go to place", command=self.go_to_place).pack(side="left")
+        ttk.Button(r3, text="Add to route", command=self.add_place_to_route).pack(side="left", padx=4)
+        ttk.Button(r3, text="Delete", command=self.delete_place).pack(side="left")
+        r4 = ttk.Frame(gb)
+        r4.pack(fill="x", padx=6, pady=2)
+        ttk.Entry(r4, textvariable=self.name_var, width=12).pack(side="left")
+        ttk.Button(r4, text="Save goal", command=self.save_pending_as_place).pack(side="left", padx=4)
+        ttk.Button(r4, text="Save robot pose", command=self.save_robot_as_place).pack(side="left")
+        ttk.Separator(gb).pack(fill="x", padx=6, pady=3)
         self.cancel_btn = tk.Button(gb, text="CANCEL GOAL (stop)", command=self.cancel_all, bg="#8b1e1e", fg="white")
         self.cancel_btn.pack(fill="x", padx=6, pady=(2, 2))
         self.route_txt = tk.Label(gb, text="", bg=BG, fg=FG, justify="left", anchor="w", font=("Menlo", 9), wraplength=270)
@@ -321,6 +346,7 @@ class App:
     # ------------------------------------------------------------------ goals
     def _update_goals(self, snap, a):
         self._gate = blockers(a, snap, self.cfg, self.armed.get())
+        self._places_ok = not self.places.mismatch(map_signature(snap.map) if snap.map else None)
         was_running = self.runner.running
         goal = self.runner.step(snap.goal, self._gate, time.monotonic())
         if goal is not None:
@@ -387,6 +413,71 @@ class App:
         self.link.cancel_goals()
         self.armed.set(False)
 
+    # ------------------------------------------------------------------ saved places
+    def _sig(self):
+        m = self.link.snapshot().map
+        return map_signature(m) if m else None
+
+    def _save_place(self, goal):
+        try:
+            sig = self._sig()
+            if sig is None:
+                raise ValueError("no map yet: connect to the robot first")
+            name = self.places.put(self.name_var.get(), goal, sig)
+            self.places.save()
+        except Exception as exc:
+            messagebox.showwarning("Cannot save place", str(exc))
+            return
+        self.place_box.configure(values=self.places.names())
+        self.place_var.set(name)
+
+    def save_pending_as_place(self):
+        if self.pending is None:
+            messagebox.showinfo("Save goal", "Click the map to choose a goal first (drag to set the heading).")
+            return
+        self._save_place(self.pending)
+
+    def save_robot_as_place(self):
+        snap = self.link.snapshot()
+        if not assess(snap, self.cfg).pose_live_in_map or snap.pose_map is None:
+            messagebox.showinfo("Save robot pose", "The robot has no live map pose right now.")
+            return
+        self._save_place(snap.pose_map)
+
+    def _selected_place(self):
+        name = self.place_var.get()
+        if not name or self.places.get(name) is None:
+            messagebox.showinfo("Saved places", "Choose a saved place first.")
+            return None
+        if not self._places_ok:
+            messagebox.showwarning("Saved places", "These places were saved on a different map than the one the robot is "
+                                   "using, so they are not valid here.")
+            return None
+        return self.places.get(name)
+
+    def go_to_place(self):
+        goal = self._selected_place()
+        if goal is None:
+            return
+        self.pending = goal
+        if self._gate:                                         # same gate, arm switch and confirmation as a clicked goal
+            messagebox.showwarning("Goal blocked", "Not sending:\n- " + "\n- ".join(self._gate))
+            return
+        self.send_pending()
+
+    def add_place_to_route(self):
+        goal = self._selected_place()
+        if goal is not None:
+            self.route.append(goal)
+
+    def delete_place(self):
+        name = self.place_var.get()
+        if name and self.places.get(name) is not None and messagebox.askyesno("Delete place", f"Delete '{name}'?"):
+            self.places.delete(name)
+            self.places.save()
+            self.place_box.configure(values=self.places.names())
+            self.place_var.set("")
+
     def _draw_goals(self, cv, v, w, h):
         legs = self.route
         pts = []
@@ -398,6 +489,12 @@ class App:
             cv.create_line(u, vv, u + 22 * math.cos(yaw), vv - 22 * math.sin(yaw), fill="#3fb950", width=2, arrow="last", tags="overlay")
         for p, q in zip(pts, pts[1:]):
             cv.create_line(p[0], p[1], q[0], q[1], fill="#3fb950", dash=(4, 3), tags="overlay")
+        if self._places_ok:
+            for name in self.places.names():
+                x, y, yaw = self.places.get(name)
+                u, vv = v.to_px(x, y, w, h)
+                cv.create_polygon(u, vv - 8, u + 8, vv, u, vv + 8, u - 8, vv, fill="#a371f7", outline="white", tags="overlay")
+                cv.create_text(u + 11, vv, text=name, anchor="w", fill="#d2a8ff", tags="overlay")
         if self.pending:
             x, y, yaw = self.pending
             u, vv = v.to_px(x, y, w, h)
