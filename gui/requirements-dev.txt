@@ -1,0 +1,2 @@
+-r requirements.txt
+websockets   # the fake rosbridge server in tests/test_integration.py

@@ -39,7 +39,7 @@ into honest OK/WARN/BAD indicators), `geometry.py` (map rendering, TF tree, scan
 ```bash
 cd gui
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt            # roslibpy, numpy, pillow
+pip install -r requirements.txt            # roslibpy, numpy, pillow  (requirements-dev.txt adds websockets for the tests)
 # Ubuntu also needs Tk:  sudo apt install python3-tk
 ssh -N -L 9090:127.0.0.1:9090 nvidia@192.168.68.107 &     # tunnel (rosbridge listens on localhost only)
 python -m jetbot_gui --host 127.0.0.1
@@ -60,6 +60,8 @@ Layout: a header with the connection, the **MOTION** switch and **STOP**; status
 **The safety gate.** GO is blocked, with the reason shown, unless: MOTION is on; the link is up; the map pose is live; `move_base` is running; the robot's
 pose agrees with the LiDAR scan (*Pose vs scan* not red); AMCL's uncertainty is small; no goal is already active; and teleop is off. The gate checks
 localisation, not the world: it does not know if a person or pet is in the way.
+
+**On the map.** The robot is drawn with its planner footprint (dashed circle, 0.12 m radius), the LiDAR scan in red, your destination in orange, the goal being driven to in blue with the planned path as a blue line, route legs in green, saved places as purple diamonds, and a 1 m scale bar. The path line is read-only and only shown while a goal is active.
 
 **Routes.** *+ Route* queues the destination (green numbered markers). *Run route* (Navigate tab) sends the legs one at a time and only moves on after
 `move_base` reports the previous goal reached. The first failure, cancellation or failed gate check stops it; it never retries.
