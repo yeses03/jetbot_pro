@@ -73,8 +73,23 @@ Nothing here claims the robot navigates reliably. See section 9 for what remains
 | Nav turn at 0.6 rad/s | 1.4 | 221° | scan fit ≈168° | ≈1.31 | scan fit |
 
 - **Findings:** at 1.0 the wheel odometry under-reports distance by about 24% (consistent across three clean tape runs); rotation was about right. `linear_correction` changes **both** odometry and the **real robot speed** (real speed at 0.10 m/s command fell to roughly half at 1.4–1.7), and it also scales odometry rotation. The effect is not a clean 1:1 multiplier.
-- **[corrected] The 1.4 choice was a mistake:** it relied on AMCL (biased) and an inconsistent tape. The scan-fit evidence suggests the right value is nearer **1.1–1.2** with `angular_correction` about **0.9**. **[hypothesis]** until measured.
+- **[corrected] The 1.4 choice was a mistake:** it relied on AMCL (biased) and an inconsistent tape. The later scan-fit calibration (section 7b) found **1.15 / 0.9** works (distance +6%, rotation +2%).
 - Odometry quality depends on speed; 0.1 m/s teleop numbers do not transfer to 0.2 m/s navigation.
+
+## 7b. Calibration result and the working configuration (afternoon of 2026-11-02)
+
+Ground truth for every row is a scan-to-map fit (`tools/scan_map_fit.py`) taken with nobody near the robot.
+
+| Test | Setting | Odometry | Truth | Error |
+|---|---|---|---|---|
+| Straight 1.7 m, teleop 0.2 m/s | `linear_correction` 1.15 | 1.835 m | 1.725 m | +6% |
+| One full turn plus 16 deg, teleop 0.6 rad/s | `angular_correction` 0.9 | 384 deg | about 376 deg | +2% |
+| Return leg, 1.74 m, move_base | 1.15 / 0.9 | 1.685 m | 1.74 m | -3% |
+
+- **Working values: `linear_correction` 1.15 and `angular_correction` 0.9** (both passed in a launch argument, see `launch/localize.launch`). The earlier choice of 1.4 was wrong (it over-read distance by about 48% and rotation by about 31%). Real speed at the 0.2 m/s command was about 0.13 m/s. Whether the firmware keeps the correction across a power cycle is untested (the driver sends it at every start).
+- **Navigation with these values, `config/living_room` (xy tolerance 0.15 m, yaw tolerance 0.25 rad), supervised:** return trip reached; a loop A (1.5, 0.1) then back to (0, 0): A ended about 0.10 m and 4 deg from the goal (rear-wall range independently gave x of about 1.40), B ended 0.03 m (AMCL) / 0.15 m (scan fit) and 9-14 deg from the goal. Each leg took 15-30 s including turns. This is one loop in one room, not a validation.
+- The earlier 30 deg heading error disappeared with the loose yaw tolerance (0.6 rad) tightened to 0.25 rad and the calibrated rotation.
+- Still unexplained: the scan fit's y is 0.05-0.16 m larger than AMCL's on every run.
 
 ## 8. Navigation (move_base, TEB)
 
