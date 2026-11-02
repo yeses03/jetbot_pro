@@ -21,6 +21,12 @@
   <!-- Laser model weights (defaults = amcl.launch values) and the initial pose AMCL starts from (map frame). -->
   <arg name="amcl_z_hit" default="0.5"/>
   <arg name="amcl_z_rand" default="0.5"/>
+  <!-- Odometry motion noise and laser sharpness (defaults = amcl.launch values). Lower noise = trust the odometry more. -->
+  <arg name="amcl_alpha1" default="0.2"/>
+  <arg name="amcl_alpha2" default="0.2"/>
+  <arg name="amcl_alpha3" default="0.8"/>
+  <arg name="amcl_alpha4" default="0.2"/>
+  <arg name="amcl_sigma_hit" default="0.2"/>
   <arg name="initial_x" default="0.0"/>
   <arg name="initial_y" default="0.0"/>
   <arg name="initial_a" default="0.0"/>
@@ -30,6 +36,11 @@
   <param name="/amcl/laser_max_beams" value="$(arg amcl_laser_max_beams)"/>
   <param name="/amcl/laser_z_hit" value="$(arg amcl_z_hit)"/>
   <param name="/amcl/laser_z_rand" value="$(arg amcl_z_rand)"/>
+  <param name="/amcl/odom_alpha1" value="$(arg amcl_alpha1)"/>
+  <param name="/amcl/odom_alpha2" value="$(arg amcl_alpha2)"/>
+  <param name="/amcl/odom_alpha3" value="$(arg amcl_alpha3)"/>
+  <param name="/amcl/odom_alpha4" value="$(arg amcl_alpha4)"/>
+  <param name="/amcl/laser_sigma_hit" value="$(arg amcl_sigma_hit)"/>
   <param name="/amcl/initial_pose_x" value="$(arg initial_x)"/>
   <param name="/amcl/initial_pose_y" value="$(arg initial_y)"/>
   <param name="/amcl/initial_pose_a" value="$(arg initial_a)"/>

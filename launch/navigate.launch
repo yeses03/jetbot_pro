@@ -21,6 +21,13 @@
     <arg name="amcl_laser_max_beams" value="60"/>
     <arg name="amcl_z_hit" value="0.9"/>
     <arg name="amcl_z_rand" value="0.1"/>
+    <!-- Tuned for the calibrated odometry (distance +/-6%, rotation +/-2%): the vendor defaults (alpha3 0.8) assume bad odometry
+         and let the particles wander, which is how the pose drifted 0.3 m on long legs. Untested in motion beyond the room loop. -->
+    <arg name="amcl_alpha1" value="0.12"/>
+    <arg name="amcl_alpha2" value="0.10"/>
+    <arg name="amcl_alpha3" value="0.20"/>
+    <arg name="amcl_alpha4" value="0.10"/>
+    <arg name="amcl_sigma_hit" value="0.10"/>
     <arg name="initial_x" value="$(arg initial_x)"/>
     <arg name="initial_y" value="$(arg initial_y)"/>
     <arg name="initial_a" value="$(arg initial_a)"/>
