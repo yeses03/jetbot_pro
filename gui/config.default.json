@@ -1,0 +1,5 @@
+{
+  "_comment": "Defaults. Copy only what you change into config.local.json (git-ignored), or use the GUI's Save button.",
+  "host": "127.0.0.1",
+  "port": 9090
+}
