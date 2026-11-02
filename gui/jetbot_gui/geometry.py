@@ -300,3 +300,21 @@ def fit_score(m: MapData, pts_map: np.ndarray, tol_m: float = 0.05, min_points: 
     hit = np.zeros(pts_map.shape[0], dtype=bool)
     hit[inside] = d[ri[inside], ci[inside]] <= tol_cells
     return float(hit.mean())
+
+
+# ---- goals (messages only; publishing lives in link.py and is limited to the goal and cancel topics)
+CANCEL_ALL = {"stamp": {"secs": 0, "nsecs": 0}, "id": ""}          # actionlib_msgs/GoalID with an empty id cancels every goal
+
+
+def goal_message(goal: Tuple[float, float, float], frame: str = "map") -> dict:
+    """geometry_msgs/PoseStamped for move_base_simple/goal. goal = (x, y, yaw) in the map frame."""
+    x, y, yaw = goal
+    return {"header": {"frame_id": frame},
+            "pose": {"position": {"x": float(x), "y": float(y), "z": 0.0},
+                     "orientation": {"x": 0.0, "y": 0.0, "z": math.sin(yaw / 2.0), "w": math.cos(yaw / 2.0)}}}
+
+
+def heading_towards(frm: Tuple[float, float], to: Tuple[float, float]) -> float:
+    """Yaw that points from `frm` to `to` (used when a goal is clicked without dragging a heading)."""
+    return math.atan2(to[1] - frm[1], to[0] - frm[0])
+

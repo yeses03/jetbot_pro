@@ -25,6 +25,10 @@ class Config:
     amcl_pose_topic: str = "/amcl_pose"
     tf_topic: str = "/tf"
     tf_static_topic: str = "/tf_static"
+    # Goals: the ONLY topics the GUI ever publishes to (it never publishes velocity commands).
+    goal_topic: str = "/move_base_simple/goal"
+    cancel_topic: str = "/move_base/cancel"
+    goal_status_topic: str = "/move_base/status"
     # Frames (jetbot_pro launch files use base_footprint, odom, map, laser_frame).
     map_frame: str = "map"
     odom_frame: str = "odom"
