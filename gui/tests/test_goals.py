@@ -58,7 +58,7 @@ class GateTests(unittest.TestCase):
         self.assertEqual(self.why(), [])
 
     def test_not_armed_blocks(self):
-        self.assertTrue(any("not armed" in w for w in self.why(armed=False)))
+        self.assertTrue(any("not enabled" in w for w in self.why(armed=False)))
 
     def test_pose_that_does_not_match_the_scan_blocks(self):
         wrong = (0.0, 0.0, math.radians(30))
@@ -129,7 +129,7 @@ class RouteTests(unittest.TestCase):
     def test_disarming_stops_the_route(self):
         r = RouteRunner()
         r.start(self.L)
-        self.assertIsNone(r.step(None, ["goals are not armed (tick 'Arm goals')"], 0.0))
+        self.assertIsNone(r.step(None, ["motion is not enabled (switch MOTION on)"], 0.0))
         self.assertEqual(r.state, RouteRunner.FAILED)
 
     def test_empty_route_does_nothing(self):
@@ -140,24 +140,33 @@ class RouteTests(unittest.TestCase):
 
 
 class WhitelistTests(unittest.TestCase):
-    def test_link_refuses_any_other_topic(self):
+    def test_link_refuses_every_topic_except_the_four_it_needs(self):
         link = RobotLink(Config())
-        for topic in ("/cmd_vel", "/cmd_vel_dry", "/move_base_simple/goal_x", "/initialpose_x", "/odom"):
-            with self.assertRaises(ValueError):
-                link._publish(topic, "geometry_msgs/Twist", {})
+        for topic in ("/cmd_vel_dry", "/move_base_simple/goal_x", "/initialpose_x", "/odom", "/tf", "/map", "/scan",
+                      "/cmd_vel_extra", "/imu"):
+            with self.assertRaises(ValueError, msg=topic):
+                link._publish(topic, "std_msgs/String", {})
 
-    def test_no_velocity_publisher_anywhere_in_the_package(self):
+    def test_velocity_is_published_by_one_capped_method_and_nowhere_else(self):
         pkg = os.path.join(os.path.dirname(__file__), "..", "jetbot_gui")
-        for name in os.listdir(pkg):
+        mentions = {}
+        for name in sorted(os.listdir(pkg)):
             if name.endswith(".py"):
                 with open(os.path.join(pkg, name)) as fh:
                     text = fh.read()
-                self.assertNotIn("cmd_vel", text.replace("never publishes velocity", ""), name + " mentions cmd_vel")
+                mentions[name] = [w for w in ("cmd_vel", "Twist", "send_velocity", "_publish(") if w in text]
+        self.assertEqual([n for n, m in mentions.items() if "cmd_vel" in m or "Twist" in m], ["config.py", "link.py"])
+        # the window may only call the capped method, never publish raw messages
+        self.assertNotIn("_publish(", "".join(mentions["app.py"]))
+        self.assertIn("send_velocity", mentions["app.py"])
+        for name in ("goals.py", "places.py", "status.py", "geometry.py", "teleop.py", "theme.py"):
+            self.assertEqual(mentions[name], [] if name != "teleop.py" else [], name)
 
     def test_send_before_connect_returns_false(self):
         link = RobotLink(Config())
         self.assertFalse(link.send_goal((1, 1, 0)))
         self.assertFalse(link.cancel_goals())
+        self.assertFalse(link.send_velocity(0.1, 0.0))
 
 
 class EndToEndTests(unittest.TestCase):

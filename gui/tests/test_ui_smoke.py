@@ -61,83 +61,304 @@ class UiSmokeTests(unittest.TestCase):
 
 
 
-class Ev:                                                      # minimal stand-in for a Tk mouse event
-    def __init__(self, x, y):
-        self.x, self.y = x, y
+class Ev:                                                      # minimal stand-in for a Tk event
+    def __init__(self, x=0, y=0, state=0, keysym=""):
+        self.x, self.y, self.state, self.keysym = x, y, state, keysym
+        self.widget = None
 
 
-class GoalUiTests(unittest.TestCase):
-    def _app(self):
+def make_app(test):
+    try:
+        import tkinter as tk
+        root = tk.Tk()
+    except Exception as exc:
+        test.skipTest(f"no usable Tk/display: {exc}")
+    root.withdraw()
+    from jetbot_gui.app import App
+    return root, App(root, Config(host="127.0.0.1"))
+
+
+def good_snap(pose=(0.0, 0.0, 0.0), **over):
+    _, sc = room_scan()
+    kw = dict(map=room_map(), map_age=1.0, scan=sc, scan_age=0.1, scan_hz=7.0, pose_map=pose, pose_map_age=0.1,
+              scan_in_map=pose, scan_in_map_age=0.1, scan_in_base=(0.0, 0.0, 0.0), nodes={"/amcl", "/move_base"},
+              amcl_pose=pose, amcl_sigma=(0.05, 0.05), amcl_age=0.2)
+    kw.update(over)
+    return snap(**kw)
+
+
+class ClickToGoTests(unittest.TestCase):
+    def test_a_plain_click_chooses_a_destination_without_any_drag(self):
+        root, app = make_app(self)
         try:
-            import tkinter as tk
-            root = tk.Tk()
-        except Exception as exc:
-            self.skipTest(f"no usable Tk/display: {exc}")
-        root.withdraw()
-        from jetbot_gui.app import App
-        return root, App(root, Config(host="127.0.0.1"))
+            app.link.snapshot = lambda: good_snap()
+            root.update_idletasks()
+            w, h = app._size()
+            app._press(Ev(w // 2 + 100, h // 2))
+            app._release(Ev(w // 2 + 100, h // 2))
+            self.assertIsNotNone(app.pending)
+            self.assertAlmostEqual(app.pending[2], 0.0, places=1)       # heading defaults to the direction of travel
+        finally:
+            root.destroy()
 
-    def _snap(self, pose=(0.0, 0.0, 0.0)):
-        _, sc = room_scan()
-        return snap(map=room_map(), map_age=1.0, scan=sc, scan_age=0.1, scan_hz=7.0, pose_map=pose, pose_map_age=0.1,
-                    scan_in_map=pose, scan_in_map_age=0.1, nodes={"/amcl", "/move_base"}, amcl_pose=pose,
-                    amcl_sigma=(0.05, 0.05), amcl_age=0.2)
+    def test_a_drag_pans_the_map_and_does_not_choose_a_destination(self):
+        root, app = make_app(self)
+        try:
+            app.link.snapshot = lambda: good_snap()
+            root.update_idletasks()
+            w, h = app._size()
+            cx0 = app.view.cx
+            app._press(Ev(200, 200))
+            app._motion(Ev(260, 200))
+            app._release(Ev(260, 200))
+            self.assertIsNone(app.pending)
+            self.assertNotEqual(app.view.cx, cx0)
+        finally:
+            root.destroy()
 
-    def test_click_and_drag_set_the_goal_and_the_gate_controls_the_buttons(self):
-        root, app = self._app()
+    def test_shift_drag_sets_the_heading(self):
+        root, app = make_app(self)
+        try:
+            app.link.snapshot = lambda: good_snap()
+            root.update_idletasks()
+            w, h = app._size()
+            app._press(Ev(w // 2, h // 2, state=1))                         # state bit 1 = Shift
+            app._motion(Ev(w // 2, h // 2 - 120, state=1))                   # drag up = +y = heading +90 deg
+            app._release(Ev(w // 2, h // 2 - 120, state=1))
+            self.assertAlmostEqual(app.pending[2], math.pi / 2, places=1)
+        finally:
+            root.destroy()
+
+    def test_go_needs_motion_on_and_a_passing_gate_and_sends_exactly_once(self):
+        root, app = make_app(self)
         try:
             sent = []
             app.link.send_goal = lambda g: sent.append(g) or True
-            s = self._snap()
+            s = good_snap()
             app.link.snapshot = lambda: s
-            app.goal_mode.set(True)
-            root.update_idletasks()
-            w, h = app._size()
-            app._press(Ev(w // 2 + 100, h // 2))                     # click: heading defaults to robot -> goal
-            self.assertIsNotNone(app.pending)
-            self.assertAlmostEqual(app.pending[2], 0.0, places=1)
-            app._motion(Ev(w // 2 + 100, h // 2 - 100))             # drag upwards: heading becomes ~ +90 deg (map y is up)
-            app._release(Ev(0, 0))
-            self.assertAlmostEqual(app.pending[2], math.pi / 2, places=1)
+            app.pending = (1.0, 1.0, 0.0)
             app.tick()
-            self.assertIn("not armed", app.block_lbl.cget("text"))
+            self.assertIn("MOTION", app.block_lbl.cget("text"))
             self.assertTrue(app.send_btn.instate(["disabled"]))
-            app.armed.set(True)
+            app.send_pending()
+            self.assertEqual(sent, [])                                          # blocked: nothing sent
+            app.set_motion(True)
             app.tick()
             self.assertEqual(app.block_lbl.cget("text"), "")
             self.assertTrue(app.send_btn.instate(["!disabled"]))
-            self.assertEqual(sent, [])                               # nothing is ever sent by ticking alone
+            self.assertEqual(sent, [])                                          # ticking alone never sends
+            app.send_btn.invoke()
+            self.assertEqual(sent, [(1.0, 1.0, 0.0)])
+            self.assertIsNone(app.pending)
+        finally:
+            root.destroy()
+
+    def test_double_click_chooses_and_goes_only_when_motion_is_on_and_the_gate_passes(self):
+        root, app = make_app(self)
+        try:
+            sent = []
+            app.link.send_goal = lambda g: sent.append(g) or True
+            app.link.snapshot = lambda: good_snap()
+            root.update_idletasks()
+            w, h = app._size()
+            app._double_click(Ev(w // 2 + 80, h // 2))
+            self.assertEqual(sent, [])                              # MOTION is off: nothing is sent
+            app.set_motion(True)
+            app._double_click(Ev(w // 2 + 80, h // 2))
+            self.assertEqual(len(sent), 1)
+            wrong = (0.0, 0.0, math.radians(30))
+            app.link.snapshot = lambda: good_snap(pose=wrong)
+            app._double_click(Ev(w // 2 + 80, h // 2))
+            self.assertEqual(len(sent), 1)                          # mislocalised: blocked
         finally:
             root.destroy()
 
     def test_a_mislocalised_robot_cannot_be_sent_anywhere(self):
-        root, app = self._app()
+        root, app = make_app(self)
         try:
             wrong = (0.0, 0.0, math.radians(30))
-            s = self._snap(pose=wrong)
-            app.link.snapshot = lambda: s
+            app.link.snapshot = lambda: good_snap(pose=wrong)
             app.pending = (1.0, 1.0, 0.0)
-            app.armed.set(True)
+            app.set_motion(True)
             app.tick()
             self.assertIn("does not match", app.block_lbl.cget("text"))
+            self.assertIn("Check pose", app.block_lbl.cget("text"))
             self.assertTrue(app.send_btn.instate(["disabled"]))
         finally:
             root.destroy()
 
-    def test_cancel_disarms_and_stops_the_route(self):
-        root, app = self._app()
+    def test_stop_cancels_goals_and_stops_the_route(self):
+        root, app = make_app(self)
         try:
             calls = []
             app.link.cancel_goals = lambda: calls.append("cancel") or True
+            app.link.send_velocity = lambda v, w: calls.append(("vel", v, w)) or True
             app.runner.start([(1.0, 0.0, 0.0)])
-            app.armed.set(True)
-            app.cancel_all()
-            self.assertEqual(calls, ["cancel"])
-            self.assertFalse(app.armed.get())
+            app.pending = (2.0, 2.0, 0.0)
+            app.stop_btn.invoke()
+            self.assertEqual(calls[0], "cancel")
+            self.assertIn(("vel", 0.0, 0.0), calls)
             self.assertFalse(app.runner.running)
+            self.assertIsNone(app.pending)
         finally:
             root.destroy()
 
+    def test_motion_switches_itself_off_after_the_idle_timeout(self):
+        root, app = make_app(self)
+        try:
+            app.link.snapshot = lambda: good_snap()
+            app.set_motion(True)
+            app._armed_since -= 400.0
+            app.tick()
+            self.assertFalse(app.armed.get())
+        finally:
+            root.destroy()
+
+
+class TeleopUiTests(unittest.TestCase):
+    def _start(self, app, sent):
+        app.link.send_velocity = lambda v, w: sent.append((round(v, 3), round(w, 3))) or True
+        app.link.cancel_goals = lambda: True
+        app.set_motion(True)
+        with mock.patch("jetbot_gui.app.messagebox") as mb:
+            mb.askyesno.return_value = True
+            app.toggle_teleop()
+
+    def test_keys_drive_only_while_teleop_is_on_and_match_the_teleop_keys(self):
+        root, app = make_app(self)
+        try:
+            sent = []
+            app.link.snapshot = lambda: good_snap()
+            app.link.send_velocity = lambda v, w: sent.append((round(v, 3), round(w, 3))) or True
+            app.set_motion(True)
+            self.assertIsNone(app._key_down(Ev(keysym="i")))                    # teleop off: keys do nothing
+            app.tick()
+            self.assertTrue(all(c == (0.0, 0.0) for c in sent))
+            sent.clear()
+            self._start(app, sent)
+            self.assertTrue(app.teleop_on)
+            self.assertEqual(app._key_down(Ev(keysym="i")), "break")
+            app.tick()
+            self.assertEqual(sent[-1], (0.15, 0.0))
+            app._key_down(Ev(keysym="j"))
+            app.tick()
+            self.assertEqual(sent[-1], (0.0, 0.5))
+            app._key_down(Ev(keysym="comma"))
+            app.tick()
+            self.assertEqual(sent[-1], (-0.15, 0.0))
+            app._key_down(Ev(keysym="k"))
+            app.tick()
+            self.assertEqual(sent[-1], (0.0, 0.0))
+            for diagonal in ("u", "o", "m", "period"):
+                self.assertIsNone(app._key_down(Ev(keysym=diagonal)))
+        finally:
+            app.teleop_on = False
+            root.destroy()
+
+    def test_the_obstacle_guard_blocks_forward_and_says_why(self):
+        root, app = make_app(self)
+        try:
+            from jetbot_gui.geometry import ScanData
+            import numpy as np
+            sent = []
+            ranges = np.full(360, 3.0)
+            ranges[178:183] = 0.30                                              # 0.30 m dead ahead (scan 0 deg = rear: 180 = front)
+            sc = ScanData("laser_frame", 0.0, math.radians(1.0), 0.15, 12.0, ranges)
+            app.link.snapshot = lambda: good_snap(scan=sc, scan_in_base=(0.0, 0.0, math.pi))
+            self._start(app, sent)
+            app._key_down(Ev(keysym="i"))
+            app.tick()
+            self.assertEqual(sent[-1], (0.0, 0.0))
+            self.assertIn("ahead", app.tele_out.cget("text"))
+        finally:
+            app.teleop_on = False
+            root.destroy()
+
+    def test_losing_focus_or_esc_stops_teleop_and_sends_zeros(self):
+        root, app = make_app(self)
+        try:
+            sent = []
+            app.link.snapshot = lambda: good_snap()
+            self._start(app, sent)
+            app._key_down(Ev(keysym="i"))
+            ev = Ev()
+            ev.widget = root
+            app._focus_out(ev)
+            self.assertFalse(app.teleop_on)
+            sent.clear()
+            for _ in range(5):
+                app.tick()
+            self.assertEqual(sent, [(0.0, 0.0)] * 3)                            # exactly three zero commands, then silence
+            self._start(app, sent)
+            app._key_down(Ev(keysym="Escape"))
+            self.assertFalse(app.teleop_on)
+        finally:
+            app.teleop_on = False
+            root.destroy()
+
+    def test_teleop_cannot_start_without_motion_a_live_lidar_or_a_connection(self):
+        root, app = make_app(self)
+        try:
+            app.link.snapshot = lambda: good_snap()
+            with mock.patch("jetbot_gui.app.messagebox") as mb:
+                app.toggle_teleop()
+                self.assertTrue(mb.showwarning.called)                          # MOTION is off
+            self.assertFalse(app.teleop_on)
+            app.set_motion(True)
+            app.link.snapshot = lambda: good_snap(scan=None, scan_age=None)
+            with mock.patch("jetbot_gui.app.messagebox") as mb:
+                app.toggle_teleop()
+                self.assertTrue(mb.showwarning.called)                          # no live LiDAR
+            self.assertFalse(app.teleop_on)
+        finally:
+            root.destroy()
+
+    def test_switching_motion_off_stops_teleop(self):
+        root, app = make_app(self)
+        try:
+            sent = []
+            app.link.snapshot = lambda: good_snap()
+            self._start(app, sent)
+            app.set_motion(False)
+            self.assertFalse(app.teleop_on)
+        finally:
+            root.destroy()
+
+    def test_typing_in_a_text_box_never_drives(self):
+        root, app = make_app(self)
+        try:
+            import tkinter as tk
+            sent = []
+            app.link.snapshot = lambda: good_snap()
+            self._start(app, sent)
+            entry = tk.Entry(root)
+            entry.place(x=0, y=0)
+            root.deiconify()
+            root.update()
+            entry.focus_force()
+            root.update()
+            self.assertIsNone(app._key_down(Ev(keysym="i")))
+            app.tick()
+            self.assertEqual(sent[-1], (0.0, 0.0))
+        finally:
+            app.teleop_on = False
+            root.destroy()
+
+    def test_pad_buttons_use_the_same_commands(self):
+        root, app = make_app(self)
+        try:
+            sent = []
+            app.link.snapshot = lambda: good_snap()
+            self._start(app, sent)
+            app._pad_down((1.0, 0.0))
+            app.tick()
+            self.assertEqual(sent[-1], (0.15, 0.0))
+            app._pad_up()
+            app.tick()
+            self.assertEqual(sent[-1], (0.0, 0.0))
+        finally:
+            app.teleop_on = False
+            root.destroy()
 
 
 class RelocUiTests(unittest.TestCase):

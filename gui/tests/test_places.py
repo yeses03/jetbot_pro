@@ -110,7 +110,7 @@ class PlacesUiTests(unittest.TestCase):
                     scan_in_map=pose, scan_in_map_age=0.1, nodes={"/amcl", "/move_base"}, amcl_pose=pose,
                     amcl_sigma=(0.05, 0.05), amcl_age=0.2)
 
-    def test_save_a_clicked_goal_then_go_to_it_through_the_normal_gate(self):
+    def test_save_a_chosen_destination_then_go_to_it_through_the_normal_gate(self):
         root, app, d = self._app()
         try:
             s = self._snap()
@@ -125,20 +125,19 @@ class PlacesUiTests(unittest.TestCase):
             app.pending = None
             app.tick()
             with mock.patch("jetbot_gui.app.messagebox") as mb:
-                mb.askyesno.return_value = True
-                app.go_to_place()                                   # not armed: must warn and send nothing
+                app.go_to_place()                                   # MOTION is off: must warn and send nothing
                 self.assertEqual(sent, [])
                 self.assertTrue(mb.showwarning.called)
-                app.armed.set(True)
+                app.set_motion(True)
                 app.tick()
-                app.go_to_place()                                   # armed + gate ok + confirmed: sends exactly once
+                app.go_to_place()                                   # motion on and the gate passes: sends exactly once
             self.assertEqual(sent, [(1.2, 0.8, math.pi / 2)])
-            self.assertFalse(app.armed.get())                       # one send per arming
+            self.assertTrue(app.armed.get())                        # the master switch stays on until you turn it off
         finally:
             root.destroy()
             d.cleanup()
 
-    def test_declining_the_confirmation_sends_nothing(self):
+    def test_a_blocked_gate_sends_nothing_even_for_a_saved_place(self):
         root, app, d = self._app()
         try:
             s = self._snap()
@@ -147,13 +146,15 @@ class PlacesUiTests(unittest.TestCase):
             app.link.send_goal = lambda g: sent.append(g) or True
             app.places.put("a", (1, 1, 0), map_signature(s.map))
             app.place_var.set("a")
-            app.armed.set(True)
+            app.set_motion(True)
+            app.teleop_on = True                                    # teleop on blocks goals
             app.tick()
             with mock.patch("jetbot_gui.app.messagebox") as mb:
-                mb.askyesno.return_value = False
                 app.go_to_place()
+                self.assertTrue(mb.showwarning.called)
             self.assertEqual(sent, [])
         finally:
+            app.teleop_on = False
             root.destroy()
             d.cleanup()
 
@@ -166,10 +167,9 @@ class PlacesUiTests(unittest.TestCase):
             app.link.send_goal = lambda g: sent.append(g) or True
             app.places.put("a", (1, 1, 0), SIG)                    # saved on a 320x320 map; the robot has the room map
             app.place_var.set("a")
-            app.armed.set(True)
+            app.set_motion(True)
             app.tick()
             with mock.patch("jetbot_gui.app.messagebox") as mb:
-                mb.askyesno.return_value = True
                 app.go_to_place()
                 self.assertTrue(mb.showwarning.called)
             self.assertEqual(sent, [])
