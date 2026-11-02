@@ -84,6 +84,55 @@ class PlacesStorageTests(unittest.TestCase):
         self.assertEqual(map_signature(m1), map_signature(m2))
 
 
+class PlacesScopeTests(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = Path(self.dir.name) / "places.local.json"
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_each_map_has_its_own_places(self):
+        p = Places(self.path)
+        p.use("kitchen")
+        p.put("fridge", (4.5, 1.5, 0.0), SIG)
+        p.use("garage")
+        self.assertEqual(p.names(), [])                            # a place saved on one map does not exist on another
+        p.put("car", (1.0, 1.0, 0.0), SIG)
+        p.save()
+        q = Places(self.path)
+        q.load()
+        q.use("kitchen")
+        self.assertEqual(q.names(), ["fridge"])
+        q.use("garage")
+        self.assertEqual(q.names(), ["car"])
+
+    def test_same_shaped_maps_are_still_kept_apart(self):
+        p = Places(self.path)
+        p.use("a")
+        p.put("x", (1, 1, 0), SIG)
+        p.use("b")
+        p.put("x", (9, 9, 0), SIG)                                 # same signature, different map: independent
+        p.use("a")
+        self.assertEqual(p.get("x"), (1.0, 1.0, 0.0))
+
+    def test_a_version_1_file_loads_into_the_default_scope(self):
+        self.path.write_text(json.dumps({"map": SIG, "places": {"home": [0.5, 0.4, 0.0]}}))
+        p = Places(self.path)
+        p.load()
+        self.assertEqual(p.scope, "default")
+        self.assertEqual(p.get("home"), (0.5, 0.4, 0.0))
+        p.use("other")
+        self.assertEqual(p.names(), [])
+
+    def test_a_corrupt_scope_name_cannot_inject(self):
+        p = Places(self.path)
+        p.use("../../etc/passwd")                                   # a scope is only a dictionary key, never a path
+        p.put("a", (1, 1, 0), SIG)
+        p.save()
+        self.assertEqual(sorted(os.listdir(self.dir.name)), ["places.local.json"])
+
+
 class Ev:
     def __init__(self, x, y):
         self.x, self.y = x, y

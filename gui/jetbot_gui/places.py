@@ -35,10 +35,33 @@ def map_signature(m) -> dict:
 
 
 class Places:
+    """Named goals, kept PER MAP: a place saved on one map is meaningless on another. `use(scope)` picks the map (the robot's active map name);
+    without a robot manager the scope is "default". Every scope also remembers the map signature it was saved on."""
+
+    DEFAULT_SCOPE = "default"
+
     def __init__(self, path: Path = PLACES_FILE):
         self.path = Path(path)
-        self.items: Dict[str, Goal] = {}
-        self.map_sig: Optional[dict] = None
+        self.scopes: Dict[str, dict] = {}
+        self.scope = self.DEFAULT_SCOPE
+        self.use(self.DEFAULT_SCOPE)
+
+    def use(self, scope: str) -> None:
+        self.scope = scope or self.DEFAULT_SCOPE
+        self.scopes.setdefault(self.scope, {"map": None, "places": {}})
+
+    # the current scope, exposed the way the rest of the code (and the tests) already use it
+    @property
+    def items(self) -> Dict[str, Goal]:
+        return self.scopes[self.scope]["places"]
+
+    @property
+    def map_sig(self) -> Optional[dict]:
+        return self.scopes[self.scope]["map"]
+
+    @map_sig.setter
+    def map_sig(self, value) -> None:
+        self.scopes[self.scope]["map"] = value
 
     def names(self) -> List[str]:
         return sorted(self.items, key=str.lower)
@@ -62,20 +85,26 @@ class Places:
         return self.items.pop(name, None) is not None
 
     def mismatch(self, sig: Optional[dict]) -> bool:
-        """True when the places belong to a different map than the one the robot is using."""
+        """True when this scope's places were saved on a map of a different shape than the one the robot is using."""
         return bool(self.items) and self.map_sig is not None and sig is not None and sig != self.map_sig
 
     def load(self) -> None:
         if not self.path.exists():
             return
         data = json.loads(self.path.read_text())
-        self.map_sig = data.get("map")
-        self.items = {}
-        for name, g in data.get("places", {}).items():
-            self.items[clean_name(name)] = tuple(float(v) for v in g)       # type: ignore[assignment]
+        self.scopes = {}
+        if data.get("version") == 2:
+            for scope, body in data.get("scopes", {}).items():
+                self.scopes[scope] = {"map": body.get("map"),
+                                      "places": {clean_name(n): tuple(float(v) for v in g) for n, g in body.get("places", {}).items()}}
+        else:                                                        # version 1: one global set, now the "default" scope
+            self.scopes[self.DEFAULT_SCOPE] = {"map": data.get("map"),
+                                               "places": {clean_name(n): tuple(float(v) for v in g) for n, g in data.get("places", {}).items()}}
+        self.use(self.scope)
 
     def save(self) -> None:
-        payload = {"map": self.map_sig, "places": {n: list(g) for n, g in self.items.items()}}
+        payload = {"version": 2, "scopes": {sc: {"map": b["map"], "places": {n: list(g) for n, g in b["places"].items()}}
+                                            for sc, b in self.scopes.items() if b["places"] or sc == self.scope}}
         fd, tmp = tempfile.mkstemp(dir=str(self.path.parent), prefix=".places-", suffix=".tmp")
         try:
             with os.fdopen(fd, "w") as fh:
