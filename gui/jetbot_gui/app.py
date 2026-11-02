@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 import sys
+import threading
 import time
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -10,7 +11,7 @@ from tkinter import messagebox, ttk
 from PIL import ImageTk
 
 from . import config as cfgmod
-from .geometry import View, heading_towards, render_map, transform_points
+from .geometry import View, fit_score, heading_towards, pose_search, render_map, transform_points
 from .goals import RouteRunner, blockers
 from .places import Places, map_signature
 from .link import CONNECTED, RobotLink
@@ -47,6 +48,8 @@ class App:
         self.places = Places()                        # saved named places (places.local.json)
         self._places_ok = True                        # False when the places belong to a different map
         self.place_var = tk.StringVar()
+        self.reloc_global = tk.BooleanVar(value=False)   # search the whole room instead of near the reported pose
+        self._reloc = None                            # latest 'check pose from scan' job: dict(state, results, ...)
         self.name_var = tk.StringVar()
         try:
             self.places.load()
@@ -134,6 +137,17 @@ class App:
         self.pose_txt = tk.Label(pb, text="", bg=BG, fg=FG, justify="left", anchor="w", font=("Menlo", 10),
                                  width=36)
         self.pose_txt.pack(anchor="w", padx=6, pady=4)
+
+        rb = ttk.Frame(pb)
+        rb.pack(fill="x", padx=6, pady=(0, 2))
+        self.reloc_btn = ttk.Button(rb, text="Check pose from scan", command=self.check_pose)
+        self.reloc_btn.pack(side="left")
+        self.apply_btn = ttk.Button(rb, text="Apply to AMCL", command=self.apply_pose)
+        self.apply_btn.pack(side="left", padx=4)
+        self.apply_btn.state(["disabled"])
+        ttk.Checkbutton(pb, text="Search the whole room (robot was carried)", variable=self.reloc_global).pack(anchor="w", padx=6)
+        self.reloc_txt = tk.Label(pb, text="", bg=BG, fg=FG, justify="left", anchor="w", font=("Menlo", 9), wraplength=270)
+        self.reloc_txt.pack(anchor="w", padx=6, pady=(0, 4))
 
         gb = ttk.LabelFrame(side, text="Goals (moves the robot)")
         gb.pack(fill="x", pady=(6, 0))
@@ -281,6 +295,7 @@ class App:
             a = assess(snap, self.cfg)
             self._update_chips(a)
             self._update_goals(snap, a)
+            self._update_reloc(snap)
             self._draw_map(snap, a)
             self._draw_lidar(snap, a)
             self._update_text(snap, a)
@@ -369,7 +384,8 @@ class App:
             route.append(self.runner.message)
         self.route_txt.configure(text="\n".join(route), fg=LEVEL_COLOR[BAD if self.runner.state == RouteRunner.FAILED else OK])
         wants = self.pending is not None or bool(self.route)
-        self.block_lbl.configure(text=("Blocked: " + "; ".join(self._gate)) if (wants and self._gate) else "")
+        hint = "  Try 'Check pose from scan'." if any("does not match" in g for g in self._gate) else ""
+        self.block_lbl.configure(text=("Blocked: " + "; ".join(self._gate) + hint) if (wants and self._gate) else "")
         connected = snap.conn_state == CONNECTED
         self.send_btn.state(["!disabled"] if (self.pending and not self._gate and not self.runner.running) else ["disabled"])
         self.run_btn.state(["!disabled"] if (self.route and not self._gate and not self.runner.running) else ["disabled"])
@@ -478,6 +494,87 @@ class App:
             self.place_box.configure(values=self.places.names())
             self.place_var.set("")
 
+    # ------------------------------------------------------------------ relocalisation
+    def check_pose(self):
+        """Search for the pose where the LiDAR scan fits the saved map best (background thread: it takes a second or two)."""
+        snap = self.link.snapshot()
+        if snap.map is None or snap.scan is None or snap.scan_in_base is None:
+            messagebox.showinfo("Check pose", "Needs a live map and scan (and the scan's transform to the robot).")
+            return
+        if self._reloc and self._reloc.get("state") == "running":
+            return
+        pts = transform_points(snap.scan.points(), snap.scan_in_base)           # scan points in the robot frame
+        reported = snap.pose_map
+        centre = None if (self.reloc_global.get() or reported is None) else reported
+        reported_fit = fit_score(snap.map, transform_points(snap.scan.points(), snap.scan_in_map)) if snap.scan_in_map else None
+        job = {"state": "running", "results": [], "reported": reported, "reported_fit": reported_fit, "whole_room": centre is None}
+        self._reloc = job
+        m = snap.map
+
+        def work():
+            try:
+                job["results"] = pose_search(m, pts, centre)
+            except Exception as exc:
+                job["error"] = repr(exc)
+            job["state"] = "done"
+        threading.Thread(target=work, daemon=True, name="pose-search").start()
+
+    def _reloc_best(self):
+        job = self._reloc
+        if not job or job.get("state") != "done" or not job.get("results"):
+            return None
+        return job["results"][0]
+
+    def _reloc_ambiguous(self):
+        res = self._reloc["results"]
+        return len(res) > 1 and res[1][0] > res[0][0] - 0.08
+
+    def _update_reloc(self, snap):
+        job = self._reloc
+        if not job:
+            self.reloc_txt.configure(text="")
+            self.apply_btn.state(["disabled"])
+            return
+        if job["state"] == "running":
+            self.reloc_txt.configure(text="searching" + (" the whole room" if job["whole_room"] else "") + "...", fg=GREY)
+            self.apply_btn.state(["disabled"])
+            return
+        if job.get("error"):
+            self.reloc_txt.configure(text="search failed: " + job["error"], fg=LEVEL_COLOR[BAD])
+            self.apply_btn.state(["disabled"])
+            return
+        best = self._reloc_best()
+        if best is None:
+            self.reloc_txt.configure(text="no usable fit: too few scan points, or no wall data.", fg=LEVEL_COLOR[BAD])
+            self.apply_btn.state(["disabled"])
+            return
+        score, x, y, yaw = best
+        cur = job["reported_fit"]
+        lines = [f"scan fits best at x {x:+.2f} y {y:+.2f} yaw {math.degrees(yaw):+.0f} deg",
+                 f"fit {score * 100:.0f}%" + (f" (at the reported pose: {cur * 100:.0f}%)" if cur is not None else "")]
+        ok = score >= self.cfg.fit_ok
+        if not ok:
+            lines.append("not a good enough fit to trust: the robot may be outside the mapped area, or someone is next to it.")
+        if self._reloc_ambiguous():
+            r2 = job["results"][1]
+            lines.append(f"AMBIGUOUS: x {r2[1]:+.2f} y {r2[2]:+.2f} fits almost as well ({r2[0] * 100:.0f}%). Do not apply.")
+            ok = False
+        self.reloc_txt.configure(text="\n".join(lines), fg=LEVEL_COLOR[OK if ok else WARN])
+        self.apply_btn.state(["!disabled"] if ok and snap.conn_state == CONNECTED else ["disabled"])
+
+    def apply_pose(self):
+        best = self._reloc_best()
+        if best is None or best[0] < self.cfg.fit_ok or self._reloc_ambiguous():
+            return
+        score, x, y, yaw = best
+        if not messagebox.askyesno("Apply pose to AMCL",
+                                   f"Tell AMCL the robot is at x {x:+.2f}, y {y:+.2f}, facing {math.degrees(yaw):+.0f} deg "
+                                   f"(scan fit {score * 100:.0f}%)?\n\nOnly do this if the robot really is there (cyan cross on the map). "
+                                   "It does not move the robot, but every goal afterwards is planned from this pose."):
+            return
+        if self.link.set_initial_pose((x, y, yaw)):
+            self._reloc = None
+
     def _draw_goals(self, cv, v, w, h):
         legs = self.route
         pts = []
@@ -489,6 +586,12 @@ class App:
             cv.create_line(u, vv, u + 22 * math.cos(yaw), vv - 22 * math.sin(yaw), fill="#3fb950", width=2, arrow="last", tags="overlay")
         for p, q in zip(pts, pts[1:]):
             cv.create_line(p[0], p[1], q[0], q[1], fill="#3fb950", dash=(4, 3), tags="overlay")
+        best = self._reloc_best() if self._reloc else None
+        if best is not None:
+            u, vv = v.to_px(best[1], best[2], w, h)
+            cv.create_line(u - 10, vv, u + 10, vv, fill="#39d0d8", width=2, tags="overlay")
+            cv.create_line(u, vv - 10, u, vv + 10, fill="#39d0d8", width=2, tags="overlay")
+            cv.create_line(u, vv, u + 24 * math.cos(best[3]), vv - 24 * math.sin(best[3]), fill="#39d0d8", width=2, arrow="last", tags="overlay")
         if self._places_ok:
             for name in self.places.names():
                 x, y, yaw = self.places.get(name)
