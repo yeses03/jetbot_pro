@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<!-- Mapping stack: chassis, LiDAR and GMapping (no camera, no AMCL, no move_base). Started by the JetBot manager for "map a new area".
+     Drive with the console's teleop pad. The map origin is where the robot stands when this starts, so start from a spot you can find again.
+     The initial map size is +/- extent metres around the start (GMapping still grows it if the room is bigger).
+     The odometry corrections are the calibrated ones passed in by the manager; the defaults here leave the firmware scale unchanged. -->
+<launch>
+  <arg name="linear_correction" default="1.0"/>
+  <arg name="angular_correction" default="1.0"/>
+  <arg name="extent" default="8.0"/>
+
+  <include file="$(find jetbot_pro)/launch/jetbot.launch" />
+  <param name="/jetbot/linear_correction" value="$(arg linear_correction)"/>
+  <param name="/jetbot/angular_correction" value="$(arg angular_correction)"/>
+
+  <include file="$(find jetbot_pro)/launch/lidar.launch" />
+
+  <include file="$(find jetbot_pro)/launch/gmapping.launch" />
+  <param name="/slam_gmapping/xmin" value="$(eval -1.0 * arg('extent'))"/>
+  <param name="/slam_gmapping/ymin" value="$(eval -1.0 * arg('extent'))"/>
+  <param name="/slam_gmapping/xmax" value="$(arg extent)"/>
+  <param name="/slam_gmapping/ymax" value="$(arg extent)"/>
+</launch>
