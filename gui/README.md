@@ -1,12 +1,14 @@
-# JetBot Pro dashboard (map, LiDAR, pose, and goals for move_base)
+# JetBot Pro navigation console (map, LiDAR, pose, click-to-go, teleop)
 
 A desktop GUI (Python + Tkinter) that shows what the JetBot is actually doing: map, LiDAR, robot pose, link health.
 It runs on your Mac/Ubuntu VM and talks to the **ROS 1 Melodic** robot over the network through **rosbridge**.
 No ROS is needed on the GUI machine, and nothing on the robot is migrated to ROS 2.
 
-**What it can and cannot do to the robot.** It can send **goals** to `move_base` and cancel them (section "Sending goals"). It **never publishes velocity commands**, has no manual driving, and cannot bypass move_base's obstacle handling; the link refuses to publish to any topic except the goal, goal-cancel and AMCL initial-pose topics (tested). There is no emergency stop: Cancel stops move_base's goal, the **power switch is the real stop**.
-
-Adapted (not copied) from the Acrux GUI; none of its ROS 2 / Nav2 / SSH / credential code is used.
+**What it can and cannot do to the robot.** It can (1) send **goals** to `move_base` and cancel them, (2) **teleoperate** the robot with the same keys as
+`teleop_twist_keyboard`, and (3) tell AMCL where the robot is. Nothing else: the link refuses every other topic, and the only velocity path is the
+teleop pad, which is hard-capped (0.25 m/s, 0.8 rad/s), guarded by the LiDAR, and times out by itself. Everything that can move the robot sits behind
+one **MOTION** master switch (off by default, and it turns itself off after 5 minutes without a command). There is no emergency stop: **STOP**
+cancels goals and teleop, but the **power switch is the real stop**.
 
 ## Architecture
 
@@ -44,39 +46,54 @@ python -m jetbot_gui --host 127.0.0.1
 ```
 (`python3-tk` is a system package. On Homebrew Python for macOS use `brew install python-tk`.)
 
-## Sending goals (moves the robot: read this first)
+## Using the console (it moves the robot: read this first)
 
-The *Goals* panel is on the right. To send the robot somewhere:
-1. Tick **Click map to set a goal**, then click the map where you want it to go. **Drag** before releasing to set the heading
-   (a plain click faces the robot towards the point). An orange marker shows the pending goal.
-2. Tick **Arm goals**. Nothing can be sent while this is off, and it switches itself off after every send.
-3. Press **Send goal** and confirm the dialog. The robot WILL move: keep clear and keep a hand near the power switch.
-4. **CANCEL GOAL (stop)** cancels the goal and any route at any time. It is not an emergency stop.
+Layout: a header with the connection, the **MOTION** switch and **STOP**; status cards; the map; and a side panel with four tabs: *Navigate*,
+*Teleop*, *Pose*, *Diagnostics*.
 
-**Saved places.** Give a spot a name once, then send the robot there by name:
-* Click the map for a goal (drag for the heading), type a name, press **Save goal**. Or put the robot where you want it and press
-  **Save robot pose** (uses its live map pose, good to about 10 cm).
-* Pick the place in the dropdown and press **Go to place** (it goes through the same arm switch, safety gate and confirmation as a
-  clicked goal), **Add to route**, or **Delete**. Places show as purple diamonds with their names.
-* Places are stored in `places.local.json` (git-ignored) together with the map they were made on; if the robot is running a
-  different map, they are refused rather than sent to the wrong place.
+**Click-to-go.**
+1. Switch **MOTION** on (top right). Nothing can move the robot while it is off.
+2. **Click the map** where the robot should go. An orange marker and a bar with **GO** appear. A plain click faces the robot along its direction of travel.
+   **Shift + drag** sets the heading instead. **Drag** pans, the **wheel** zooms. **Double-click** chooses and goes in one gesture.
+3. Press **GO**. The robot drives there with `move_base`, avoiding obstacles. **STOP** (or the Space key) cancels it.
 
-**Routes:** *Add to route* queues the pending goal (green numbered markers); *Run route* sends the legs one at a time and only
-moves on when move_base reports the previous goal reached. The first failure, cancellation, or failed safety check stops it;
-it never retries.
+**The safety gate.** GO is blocked, with the reason shown, unless: MOTION is on; the link is up; the map pose is live; `move_base` is running; the robot's
+pose agrees with the LiDAR scan (*Pose vs scan* not red); AMCL's uncertainty is small; no goal is already active; and teleop is off. The gate checks
+localisation, not the world: it does not know if a person or pet is in the way.
 
-**The safety gate.** Send and Run are blocked, with the reason shown under the buttons, unless: goals are armed; the link is up;
-the map pose is live; `move_base` is running; the robot's pose agrees with the LiDAR scan (*Pose vs scan* not red); AMCL's
-uncertainty is small; and no goal is already active. The gate cannot see everything: it does not know if a person or pet is in the
-way, and it cannot judge a bad route. It is a check on localisation, not on the world.
+**Routes.** *+ Route* queues the destination (green numbered markers). *Run route* (Navigate tab) sends the legs one at a time and only moves on after
+`move_base` reports the previous goal reached. The first failure, cancellation or failed gate check stops it; it never retries.
 
-**Setup each time:** rosbridge has no authentication and listens on every interface (see robot_side/ROBOT_SETUP.md section 3), so
-apply the firewall rule on the Jetson, confirm `nc -vz <jetson-ip> 9090` fails from your computer, open the SSH tunnel, then start the GUI:
-```bash
-ssh -N -L 9090:127.0.0.1:9090 nvidia@<jetson-ip> &
-cd gui && .venv/bin/python -m jetbot_gui          # config.default.json points at 127.0.0.1
-```
-The Jetson also needs the navigation stack running with `cmd_vel_topic:=cmd_vel` for goals to move the robot (see `launch/navigate.launch`).
+**Saved places.** Give a spot a name once, then go there by name: choose a destination (or put the robot there) and use *Save current as*; later pick it
+in the dropdown and press *Go to place* (same gate as any goal), *+ Route*, or *Delete*. Places show as purple diamonds. They are stored in
+`places.local.json` (git-ignored) together with the map they were made on, and are refused on a different map.
+
+## Teleop (drive with the keyboard)
+
+Switch **MOTION** on, open the **Teleop** tab, press **Start teleop** and confirm. Keys, as in `teleop_twist_keyboard`:
+
+| Key | Action |
+|---|---|
+| `I` | forward |
+| `,` | backward |
+| `J` | turn left |
+| `L` | turn right |
+| `K` or Space | stop |
+| Esc | teleop off |
+
+The on-screen pad does the same while held. Diagonal keys (`U`, `O`, `M`, `.`) and speed keys (`Q`, `W`, `X`, `Z`) are deliberately **not** mapped.
+Speeds come from two sliders and are hard-capped.
+
+What keeps it safe, and what does not:
+* A key press holds the command for **0.7 s** (the same as the `_key_timeout` you have been using), so tap or hold; a lost key-release, a crash or a lost
+  window focus stops the robot within that time (and the driver's own 1 s command watchdog backs that up). Losing window focus, Esc, switching MOTION
+  off, disconnecting, or closing the window all stop teleop and send zero commands.
+* Starting teleop cancels any active goal, and goals are blocked while teleop is on, so `move_base` and the pad never fight over `/cmd_vel`.
+* A **LiDAR bumper** blocks motion towards something close: forward and reverse if a point is within 0.42 m in the robot's 0.4 m wide corridor, turning if
+  anything is within 0.23 m. It refuses to move at all without a live scan. It is a convenience, not a safety system: the LiDAR cannot see closer than
+  about 0.15 m, glass, or anything above or below its plane. Reverse is also blocked by a charger cable behind the robot.
+* Typing in a text box (for example a place name) never drives the robot.
+* There is no emergency stop in software. Keep a hand near the power switch.
 
 ## Fixing a wrong pose: "Check pose from scan"
 
@@ -90,7 +107,7 @@ chip turns red when that happens and the goal buttons are blocked. To fix it fro
 4. If the cross is where the robot really is, press **Apply to AMCL** and confirm. This publishes AMCL's initial pose; it does not move
    the robot, but every goal afterwards is planned from it. Check that *Pose vs scan* turns green.
 
-The link may publish to exactly three topics: the goal, goal cancel, and the AMCL initial pose. It still never publishes velocity commands.
+The link may publish to exactly four topics: the goal, goal cancel, the AMCL initial pose, and (teleop only, capped) the velocity topic.
 
 ## Configuration
 
@@ -126,7 +143,7 @@ Map controls: wheel = zoom, drag = pan, **Fit**, **Centre on robot**. The cursor
 cd gui
 python -I -m unittest discover -s tests -v
 ```
-`test_goals.py` checks the goal message, the safety gate, the route runner (sends the next leg only after success, stops at the first failure), that the link refuses every topic except goal/cancel, that no velocity topic appears anywhere in the package, and that a goal and a cancel reach a fake rosbridge server correctly. `test_reloc.py` checks the scan-to-map pose search on real scans (it recovers the 0.35 m and 30 degree errors AMCL made, with and without a guess, and reports ambiguity) and the initial-pose message; the UI tests run the check-then-apply flow. `test_places.py` checks saving, name validation, atomic writes, the different-map refusal, and the go-to-place flow with a declined/accepted confirmation. `test_fit.py` checks the pose-vs-scan indicator on a synthetic room and on **real scans captured on the robot** (`tests/fixtures/`: the cleaned living-room map and three scans, with the pose AMCL reported and the pose a scan-to-map search found). `test_ui_smoke.py` builds the real Tk window, feeds it that real data and renders one refresh; it skips when there is no display.
+`test_teleop.py` checks the key map, the 0.7 s hold, the speed caps (also inside the link), the LiDAR bumper, and that the velocity message is clamped and goes to the velocity topic only. `test_ui_smoke.py` drives the real window: click vs drag vs Shift+drag vs double-click, the MOTION switch and its timeout, STOP, and teleop (keys, pad, focus loss, typing in a text box). `test_goals.py` checks the goal message, the safety gate, the route runner (sends the next leg only after success, stops at the first failure), that the link refuses every topic except goal/cancel, that no velocity topic appears anywhere in the package, and that a goal and a cancel reach a fake rosbridge server correctly. `test_reloc.py` checks the scan-to-map pose search on real scans (it recovers the 0.35 m and 30 degree errors AMCL made, with and without a guess, and reports ambiguity) and the initial-pose message; the UI tests run the check-then-apply flow. `test_places.py` checks saving, name validation, atomic writes, the different-map refusal, and the go-to-place flow with a declined/accepted confirmation. `test_fit.py` checks the pose-vs-scan indicator on a synthetic room and on **real scans captured on the robot** (`tests/fixtures/`: the cleaned living-room map and three scans, with the pose AMCL reported and the pose a scan-to-map search found). `test_ui_smoke.py` builds the real Tk window, feeds it that real data and renders one refresh; it skips when there is no display.
 `test_core.py` covers map orientation/origin/rotation, scan invalid-value handling, TF composition, staleness and the
 status rules. `test_integration.py` runs the real roslibpy client against a **fake rosbridge server that exists only inside
 the test** (connect-before-server-exists, live data, server dies → data goes stale, server returns → recovers). The GUI itself
@@ -147,6 +164,6 @@ never fabricates data. Requires `pip install websockets` for that one test.
 
 ## Roadmap
 
-Done: read-only dashboard, pose-vs-scan check, map-click goals, goal cancel, sequential routes. Not built, on purpose:
-manual driving and an emergency stop (they need a velocity multiplexer such as `twist_mux` on the robot, because `move_base` and any
-GUI teleop would otherwise fight over `/cmd_vel`, and the facts that gate them are in ROBOT_SETUP.md), camera and battery telemetry.
+Done: dashboard, pose-vs-scan check, click-to-go, routes, saved places, relocalisation, teleop with a LiDAR bumper, tabbed UI. Not built: a real emergency
+stop (it needs a velocity multiplexer such as `twist_mux` on the robot, so that teleop, `move_base` and a stop command have defined priorities), camera and
+battery telemetry.

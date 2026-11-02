@@ -51,6 +51,8 @@ rostopic info /map                  # latched? published by map_server (nav) or 
 * The planner and AMCL both failed safely when the pose was wrong; the dashboard should make that visible before a goal is sent.
 
 ## 6. Findings from the repo that affect later stages (not verified on the physical robot)
+* **The GUI now has a teleop pad (added 2026-11-02), still with no velocity multiplexer on the robot.** It avoids fighting `move_base` by software rules only
+  (teleop cancels goals and blocks new ones while on), which assumes nothing else publishes `/cmd_vel`. A real fix is `twist_mux`. The pad's speeds are capped in the GUI.
 * **No velocity multiplexer.** `src/jetbot.cpp` subscribes to `/cmd_vel` directly, and `move_base` (TEB planner) publishes
   to `/cmd_vel` too. A GUI teleop publishing there would fight `move_base`. Manual mode must first cancel the goal; a real
   fix is a `twist_mux` on the robot.
