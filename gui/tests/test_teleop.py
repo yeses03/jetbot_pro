@@ -13,7 +13,7 @@ import numpy as np
 from jetbot_gui.config import Config
 from jetbot_gui.link import RobotLink
 from jetbot_gui.teleop import (HOLD_S, MAX_ANGULAR, MAX_LINEAR, TeleopState, clamp_command, guard)
-from test_integration import PORT, FakeRosbridge, wait_for
+from test_integration import FakeRosbridge, free_port, wait_for
 
 
 class KeyTests(unittest.TestCase):
@@ -130,13 +130,14 @@ class GuardTests(unittest.TestCase):
 
 class PublisherTests(unittest.TestCase):
     def test_send_velocity_is_clamped_inside_the_link_and_goes_to_cmd_vel_only(self):
-        cfg = Config(host="127.0.0.1", port=PORT, discovery_period_s=1.0)
-        server = FakeRosbridge()
+        port = free_port()
+        cfg = Config(host="127.0.0.1", port=port, discovery_period_s=1.0)
+        server = FakeRosbridge(port)
         server.start()
         link = RobotLink(cfg)
         try:
-            link.connect("127.0.0.1", PORT)
-            self.assertTrue(wait_for(lambda: link.snapshot().conn_state == "connected"))
+            link.connect("127.0.0.1", port)
+            self.assertTrue(wait_for(lambda: link.snapshot().conn_state == "connected"), link.snapshot().conn_detail)
             self.assertTrue(link.send_velocity(5.0, -9.0))                  # absurd request, as a UI bug might make
             self.assertTrue(link.send_velocity(0.0, 0.0))
             self.assertTrue(wait_for(lambda: len(server.client_publishes) >= 2))

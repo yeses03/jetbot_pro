@@ -2,6 +2,7 @@
 
 Run:  python -m unittest discover -s tests -v   (from gui/)
 """
+import gc
 import json
 import math
 import os
@@ -148,6 +149,8 @@ class PlacesUiTests(unittest.TestCase):
         root.withdraw()
         from jetbot_gui.app import App
         app = App(root, Config(host="127.0.0.1"))
+        from test_ui_smoke import stop_background
+        stop_background(self, app)
         d = tempfile.TemporaryDirectory()
         app.places = Places(Path(d.name) / "places.local.json")
         return root, app, d
@@ -237,6 +240,12 @@ class PlacesUiTests(unittest.TestCase):
         finally:
             root.destroy()
             d.cleanup()
+
+
+def tearDownModule():
+    # Tk variables from the destroyed windows are cycles; collect them here, on the main thread. Left alone, the collector can
+    # run inside a later test's roslibpy reactor thread, where freeing a Tcl object blocks and stalls that test's connection.
+    gc.collect()
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 
 Run:  python -m unittest discover -s tests -v   (from gui/)
 """
+import gc
 import io
 import os
 import sys
@@ -377,6 +378,12 @@ class ConnectFlowTests(unittest.TestCase):
             self.assertEqual(links, [])
         finally:
             root.destroy()
+
+
+def tearDownModule():
+    # Tk variables from the destroyed windows are cycles; collect them here, on the main thread. Left alone, the collector can
+    # run inside a later test's roslibpy reactor thread, where freeing a Tcl object blocks and stalls that test's connection.
+    gc.collect()
 
 
 if __name__ == "__main__":

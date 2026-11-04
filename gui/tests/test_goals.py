@@ -17,7 +17,7 @@ from jetbot_gui.link import RobotLink
 from jetbot_gui.status import assess
 from test_core import snap
 from test_fit import room_map, room_scan
-from test_integration import PORT, FakeRosbridge, wait_for
+from test_integration import FakeRosbridge, free_port, wait_for
 
 
 def good_snapshot(**over):
@@ -171,12 +171,13 @@ class WhitelistTests(unittest.TestCase):
 
 class EndToEndTests(unittest.TestCase):
     def test_goal_and_cancel_reach_the_robot_and_nothing_else_does(self):
-        cfg = Config(host="127.0.0.1", port=PORT, discovery_period_s=1.0)
-        server = FakeRosbridge()
+        port = free_port()
+        cfg = Config(host="127.0.0.1", port=port, discovery_period_s=1.0)
+        server = FakeRosbridge(port)
         server.start()
         link = RobotLink(cfg)
         try:
-            link.connect("127.0.0.1", PORT)
+            link.connect("127.0.0.1", port)
             self.assertTrue(wait_for(lambda: link.snapshot().conn_state == "connected"))
             self.assertTrue(wait_for(lambda: link.snapshot().goal is not None))
             self.assertEqual(link.snapshot().goal[:3], ("g1", SUCCEEDED, "Goal reached."))

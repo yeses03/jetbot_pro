@@ -17,7 +17,7 @@ from jetbot_gui.config import Config
 from jetbot_gui.geometry import fit_score, initial_pose_message, pose_search, transform_points
 from jetbot_gui.link import RobotLink
 from test_fit import FIXTURES, pose_pts, real_map, room_map, room_scan
-from test_integration import PORT, FakeRosbridge, wait_for
+from test_integration import FakeRosbridge, free_port, wait_for
 
 
 def angle_diff(a, b):
@@ -97,12 +97,13 @@ class InitialPoseTests(unittest.TestCase):
         self.assertAlmostEqual(cov[35], 0.05 ** 2)
 
     def test_it_reaches_the_robot_on_the_initialpose_topic_only(self):
-        cfg = Config(host="127.0.0.1", port=PORT, discovery_period_s=1.0)
-        server = FakeRosbridge()
+        port = free_port()
+        cfg = Config(host="127.0.0.1", port=port, discovery_period_s=1.0)
+        server = FakeRosbridge(port)
         server.start()
         link = RobotLink(cfg)
         try:
-            link.connect("127.0.0.1", PORT)
+            link.connect("127.0.0.1", port)
             self.assertTrue(wait_for(lambda: link.snapshot().conn_state == "connected"))
             self.assertTrue(link.set_initial_pose((3.0, 1.7, 0.0)))
             self.assertTrue(wait_for(lambda: len(server.client_publishes) >= 1))

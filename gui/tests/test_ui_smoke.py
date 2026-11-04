@@ -2,6 +2,7 @@
 
 Skipped when Tk or a display is unavailable. Run:  python -m unittest discover -s tests -v   (from gui/)
 """
+import gc
 import json
 import math
 import os
@@ -42,6 +43,7 @@ class UiSmokeTests(unittest.TestCase):
         try:
             from jetbot_gui.app import App
             app = App(root, Config(host="127.0.0.1"))
+            stop_background(self, app)
             with open(os.path.join(FIXTURES, "real_scans.json")) as f:
                 scan = json.load(f)["scan_a"]
             x, y, deg = scan["best_pose"]
@@ -67,6 +69,16 @@ class Ev:                                                      # minimal stand-i
         self.widget = None
 
 
+def stop_background(test, app):
+    """The window starts a rosbridge retry loop; stop it when the test ends, or it keeps running (and holding the window's
+    objects) for the rest of the session."""
+    def stop():
+        app.mgr.disconnect()
+        app.link.disconnect()
+        gc.collect()
+    test.addCleanup(stop)
+
+
 def make_app(test):
     try:
         import tkinter as tk
@@ -75,7 +87,9 @@ def make_app(test):
         test.skipTest(f"no usable Tk/display: {exc}")
     root.withdraw()
     from jetbot_gui.app import App
-    return root, App(root, Config(host="127.0.0.1"))
+    app = App(root, Config(host="127.0.0.1"))
+    stop_background(test, app)
+    return root, app
 
 
 def good_snap(pose=(0.0, 0.0, 0.0), **over):
@@ -389,7 +403,9 @@ class RelocUiTests(unittest.TestCase):
             self.skipTest(f"no usable Tk/display: {exc}")
         root.withdraw()
         from jetbot_gui.app import App
-        return root, App(root, Config(host="127.0.0.1"))
+        app = App(root, Config(host="127.0.0.1"))
+        stop_background(self, app)
+        return root, app
 
     def _wait_done(self, root, app, timeout=30.0):
         end = time.time() + timeout
@@ -451,6 +467,12 @@ class RelocUiTests(unittest.TestCase):
             self.assertEqual(applied, [])
         finally:
             root.destroy()
+
+
+def tearDownModule():
+    # Tk variables from the destroyed windows are cycles; collect them here, on the main thread. Left alone, the collector can
+    # run inside a later test's roslibpy reactor thread, where freeing a Tcl object blocks and stalls that test's connection.
+    gc.collect()
 
 
 if __name__ == "__main__":

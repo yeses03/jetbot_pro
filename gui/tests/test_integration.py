@@ -8,6 +8,7 @@ import asyncio
 import json
 import math
 import os
+import socket
 import sys
 import threading
 import time
@@ -26,8 +27,16 @@ from test_core import grid_msg, tfmsg
 PORT = 19090
 
 
+def free_port() -> int:
+    """A port nobody listens on, so a test's fake server cannot clash with a neighbour's lingering sockets."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
 class FakeRosbridge:
-    def __init__(self):
+    def __init__(self, port: int = PORT):
+        self.port = port
         self.loop = asyncio.new_event_loop()
         self.server = None
         self.subscribed = []
@@ -40,7 +49,7 @@ class FakeRosbridge:
         fut.result(5)
 
     async def _start(self):
-        self.server = await websockets.serve(self._handler, "127.0.0.1", PORT)
+        self.server = await websockets.serve(self._handler, "127.0.0.1", self.port)
 
     def stop(self):
         async def _stop():
