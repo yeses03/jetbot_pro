@@ -48,7 +48,7 @@ python -m jetbot_gui --host 127.0.0.1
 
 ## Using the console (it moves the robot: read this first)
 
-Layout: a header with the connection, the **MOTION** switch and **STOP**; status cards; the map; and a side panel with four tabs: *Navigate*,
+Layout: a header with the connection, the **MOTION** switch and **STOP**; status cards; the map; and a side panel with tabs: *Robot*, *Navigate*,
 *Teleop*, *Pose*, *Diagnostics*.
 
 **Click-to-go.**
@@ -68,7 +68,23 @@ localisation, not the world: it does not know if a person or pet is in the way.
 
 **Saved places.** Give a spot a name once, then go there by name: choose a destination (or put the robot there) and use *Save current as*; later pick it
 in the dropdown and press *Go to place* (same gate as any goal), *+ Route*, or *Delete*. Places show as purple diamonds. They are stored in
-`places.local.json` (git-ignored) together with the map they were made on, and are refused on a different map.
+`places.local.json` (git-ignored) per map, together with the shape of the map they were made on, and are refused on a different map.
+
+## Robot tab (start the robot software, map a new area, manage maps)
+
+*Work in progress: tested against fakes and a throwaway map on the robot, not yet run end to end on the live robot.*
+
+This needs the **JetBot manager** running on the Jetson (`manager/README.md`; one-time `sudo` install). Enter the robot's address and user in the
+header and press **Connect**: the console opens an SSH tunnel itself (using your normal ssh key, nothing is typed into the app), fetches the manager's
+token over it, and talks to rosbridge and the manager through two local ports. Nothing is exposed on the network.
+
+- **Start navigation on selected map** starts the chassis, LiDAR, AMCL and `move_base` on the map chosen in the library. It does not move the robot;
+  motion still needs the MOTION switch.
+- **Map a new area** starts the chassis, LiDAR and GMapping. Drive around with the Teleop tab, then name the map and press **Save map**. An
+  existing name is refused, so no map is ever overwritten.
+- **Stop software** stops whichever of the two is running.
+- **Map library**: previews, **Rename**, **Delete** (moves the map to a recoverable trash list, **Restore** brings it back), **Refresh**.
+- **Places are per map.** Switching maps shows that map's places only; places saved before this existed are in the "default" set.
 
 ## Teleop (drive with the keyboard)
 
