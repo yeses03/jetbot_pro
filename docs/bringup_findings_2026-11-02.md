@@ -25,7 +25,7 @@ Nothing here claims the robot navigates reliably. See section 9 for what remains
 ## 3. Chassis driver facts (`src/jetbot.cpp`)
 
 - Wheel odometry is **computed in the robot's firmware, not in ROS.** The driver only reads x, y, yaw (serial bytes 22–27) and dx, dy, dyaw (bytes 28–33). The firmware is not in the repo **[measured from code]**.
-- The driver sends `linear_correction` and `angular_correction` to the firmware at startup (`SetParams`, message type 0x13); both are 1.0 in `jetbot.launch`. They are the only odometry calibration knobs in software.
+- The driver sends `linear_correction` and `angular_correction` to the firmware at startup (`SetParams`, message type 0x13); both were 1.0 in `jetbot.launch` when found (the launch files now default to the calibrated 1.15 and 0.9). They are the only odometry calibration knobs in software.
 - A 1 s host-side watchdog zeroes the commanded velocity. The main loop has no sleep, so one thread sat at about 99.9% CPU; the 200 Hz `ros::Rate` fix exists as an unbuilt local patch **[measured; effect on navigation not shown]**.
 - `cmd_callback` contains `y = msg.linear.x`, a likely upstream quirk **[not investigated]**.
 - **There is no software e-stop and no velocity mux.** Stops are the power switch, the cancel topic, and the 1 s watchdog (which a continuously publishing `move_base` defeats).

@@ -45,8 +45,8 @@ rostopic info /map                  # latched? published by map_server (nav) or 
 ```
 
 ## 5. Findings from the 2026-11-02 bring-up that the dashboard is meant to expose
-* **Odometry is not calibrated yet** (the firmware scale error is about -24% at the default setting, and the correction knob
-  also changes real speed and rotation), and **AMCL can be 0.35 m or 30 degrees wrong while still publishing a confident-looking
+* **Odometry is calibrated** (the firmware scale error was about -24% at the vendor setting; the launch files now default to linear 1.15 and
+  angular 0.9, and the correction knob also changes real speed and rotation), and **AMCL can be 0.35 m or 30 degrees wrong while still publishing a confident-looking
   pose**. That is why the *Pose vs scan* chip exists: it compares the pose with the live scan against the saved map.
 * The planner and AMCL both failed safely when the pose was wrong; the dashboard should make that visible before a goal is sent.
 

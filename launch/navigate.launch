@@ -3,8 +3,8 @@
      SAFE BY DEFAULT: move_base publishes to /cmd_vel_dry, which the chassis does not read, so the wheels cannot move.
      Real motion needs an explicit  cmd_vel_topic:=cmd_vel  and a human-supervised test. -->
 <launch>
-  <arg name="linear_correction" default="1.0"/>
-  <arg name="angular_correction" default="1.0"/>
+  <arg name="linear_correction" default="1.15"/>
+  <arg name="angular_correction" default="0.9"/>
   <arg name="cmd_vel_topic" default="cmd_vel_dry"/>
   <!-- Where the robot really is when this launch starts (map frame). Default = the mapping start line. -->
   <arg name="initial_x" default="0.0"/>

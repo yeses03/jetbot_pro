@@ -2,10 +2,10 @@
 <!-- Mapping stack: chassis, LiDAR and GMapping (no camera, no AMCL, no move_base). Started by the JetBot manager for "map a new area".
      Drive with the console's teleop pad. The map origin is where the robot stands when this starts, so start from a spot you can find again.
      The initial map size is +/- extent metres around the start (GMapping still grows it if the room is bigger).
-     The odometry corrections are the calibrated ones passed in by the manager; the defaults here leave the firmware scale unchanged. -->
+     The odometry corrections default to the calibrated values (1.15 and 0.9); pass linear_correction / angular_correction only to recalibrate. -->
 <launch>
-  <arg name="linear_correction" default="1.0"/>
-  <arg name="angular_correction" default="1.0"/>
+  <arg name="linear_correction" default="1.15"/>
+  <arg name="angular_correction" default="0.9"/>
   <arg name="extent" default="8.0"/>
 
   <include file="$(find jetbot_pro)/launch/jetbot.launch" />

@@ -4,8 +4,8 @@
 
   <node pkg="jetbot_pro" type="jetbot" name="jetbot" output="screen" respawn="true">
     <param name="port_name" value="/dev/ttyACM0"/>
-    <param name="linear_correction" value="1.0"/>
-    <param name="angular_correction" value="1.0"/>
+    <param name="linear_correction" value="1.15"/>
+    <param name="angular_correction" value="0.9"/>
     <remap from="/odom" to="/odom_raw"/>
     <param name="publish_odom_transform" value="false"/>
   </node>
