@@ -354,6 +354,7 @@ int main(int argc, char* argv[])
   current_time = ros::Time::now();
   last_time = ros::Time::now();
   
+  ros::Rate loop_rate(200);
   while(ros::ok()){
     
     //send once velocity to robot base every 0.02
@@ -371,6 +372,7 @@ int main(int argc, char* argv[])
     }
     
     ros::spinOnce();
+    loop_rate.sleep();
   }
      
   return 0;
