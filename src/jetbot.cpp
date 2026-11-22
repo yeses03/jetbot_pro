@@ -322,8 +322,8 @@ int main(int argc, char* argv[])
   pn.param<std::string>("port_name",port_name,std::string("/dev/ttyACM0"));
   pn.param<int>("baud_rate",baud_rate,115200);
 
-  pn.param<double>("linear_correction",linear_correction,1.0);
-  pn.param<double>("angular_correction",angular_correction,1.0);
+  pn.param<double>("linear_correction",linear_correction,1.15);
+  pn.param<double>("angular_correction",angular_correction,0.9);
   pn.param<bool>("publish_odom_transform",publish_odom_transform,true);
   
   //set serial port
